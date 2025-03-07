@@ -13,23 +13,22 @@ This python code uses the pigpio library for low-latency GPIO pin toggling. As o
 IRIG timecodes
 --------------
 
-GPIO pin 4: IRIG B, 600 ms, 60 bits at 100 Hz (0.01 seconds per bit)
-GPIO pin 5: IRIG E, 6 seconds, 60 bits at 10 Hz (0.1 seconds per bit)
-GPIO pin 6: IRIG H, 60 seconds, 60 bits at 1 Hz (1 second per bit)
+GPIO pin 4: IRIG B, 600 ms, 60 bits at 100 Hz (0.01 seconds per bit)\
+GPIO pin 5: IRIG E, 6 seconds, 60 bits at 10 Hz (0.1 seconds per bit)\
+GPIO pin 6: IRIG H, 60 seconds, 60 bits at 1 Hz (1 second per bit)\
 
-The specifications of the IRIG timecode are here: 
+The specifications of the IRIG timecode are here:\
 https://en.wikipedia.org/wiki/IRIG_timecode (also see included IRIG_timecode.png)
 
-This implementation does not have any information after the 60th bit (the rest
-of the bits in the 100-bit sequence are empty). 
+This implementation is only 60 bits long (most IRIG implementations are 100 bits, but the extra bits do not carry useful information).
 
 --------------
 UNIX timecodes
 --------------
 
-GPIO pin 7: Unix, 600 ms, 60 bits at 100 Hz (0.01 seconds per bit)
-GPIO pin 8: Unix, 6 seconds, 60 bits at 10 Hz (0.1 seconds per bit)
-GPIO pin 9: Unix, 60 seconds, 60 bits at 1 Hz (1 second per bit)
+GPIO pin 7: Unix, 600 ms, 60 bits at 100 Hz (0.01 seconds per bit)\
+GPIO pin 8: Unix, 6 seconds, 60 bits at 10 Hz (0.1 seconds per bit)\
+GPIO pin 9: Unix, 60 seconds, 60 bits at 1 Hz (1 second per bit)\
 
 This implements a Unix timecode, which is not standardized. Briefly, it is like an IRIG timecode, except it outputs the UTC time in Unix format (the number of seconds since Jan. 1, 1970). This is a sequence of 60 bits, where the first and last bits are position markers. The Unix time is therefore encoded as a signed integer with the 58 remaining bits. The first bit in the integer is the LSB, and the last bit is the sign. The reason for using a 58-bit signed int is 1) to avoid the "2038 problem," when a 32-bit signed int rolls over in the year 2038, and 2) to make the sequence 60 bits long, consistent with IRIG-H.
 
@@ -42,18 +41,18 @@ This timecode generator runs continuously in the background as a daemon. If a re
 
 You will also need to install pigpio:
 
-sudo apt install pigpio
+sudo apt install pigpio\
 sudo systemctl enable pigpiod
 
-then:
+then:\
 sudo nano /lib/systemd/system/pigpiod.service
 
-and edit the ExecStart line to say:
+and edit the ExecStart line to say:\
 ExecStart=/usr/bin/pigpiod -l -m -s 10
 
-next:
-sudo systemctl daemon-reload
-sudo systemctl start pigpiod
+next:\
+sudo systemctl daemon-reload\
+sudo systemctl start pigpiod\
 
 
 -------------------------------
@@ -74,8 +73,8 @@ If you need to install any dependencies, do that now so that make_timecodes.py w
 
 The next step is to install the timecode generator as a system daemon
 
-sudo cp ~/IRIG/systemctl/*.service /etc/systemd/system
-sudo systemctl enable irig_unix_timecodes.service
-sudo systemctl start irig_unix_timecodes.service
+sudo cp ~/IRIG/systemctl/*.service /etc/systemd/system\
+sudo systemctl enable irig_unix_timecodes.service\
+sudo systemctl start irig_unix_timecodes.service\
 
 The timecodes should now run continuously, even after rebooting.
