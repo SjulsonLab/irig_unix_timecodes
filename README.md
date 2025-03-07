@@ -59,11 +59,11 @@ sudo systemctl start pigpiod
 TIMECODE GENERATOR INSTALLATION
 -------------------------------
 
-Next, copy this repository to /home/pi/IRIG and test whether the timecode generators run
+Next, copy this repository to /home/pi/IRIG and test whether the timecode generators run. Type:
 
 ~/IRIG/make_timecodes.py
 
-you should see
+you should see:
 
 Starting combined IRIG/Unix 60-bit generator (debug prints every 10s).
 
@@ -71,7 +71,7 @@ Uncomment the necessary lines to see debugging output.
 
 If you need to install any dependencies, do that now so that make_timecodes.py will run.
 
-The next step is to install the timecode generator as a system daemon
+The next step is to install the timecode generator as a system daemon:
 
 sudo cp ~/IRIG/systemctl/*.service /etc/systemd/system\
 sudo systemctl enable irig_unix_timecodes.service\
