@@ -1,7 +1,7 @@
 # irig_unix_timecodes
 Plays IRIG and Unix timecodes on the GPIO pins of a Raspberry Pi 4B
 
-NOTE: THIS CODE HAS NOT BEEN TESTED YET AND SHOULD NOT BE USED FOR EXPERIMENTS
+<h1>NOTE: THIS CODE HAS NOT BEEN TESTED YET AND SHOULD NOT BE USED FOR EXPERIMENTS</h1>
 
 The overarching goal of this project is to enable synchronization of multiple data streams to UTC time, a universal time standard independent of timezone. To this end, we implement IRIG timecodes, a method enabling UTC timestamps to be encoded in sequences of short and long TTL pulses from the Raspberry Pi's GPIO pins that can be sampled by an electrophysiology recording setup or used to blink an LED recorded by an imaging setup. This enables your recordings to be timestamped with the year, date, and time with millisecond precision.
 
@@ -28,7 +28,7 @@ UNIX timecodes
 
 GPIO pin 7: Unix, 600 ms, 60 bits at 100 Hz (0.01 seconds per bit)\
 GPIO pin 8: Unix, 6 seconds, 60 bits at 10 Hz (0.1 seconds per bit)\
-GPIO pin 9: Unix, 60 seconds, 60 bits at 1 Hz (1 second per bit)\
+GPIO pin 9: Unix, 60 seconds, 60 bits at 1 Hz (1 second per bit)
 
 This implements a Unix timecode, which is not standardized. Briefly, it is like an IRIG timecode, except it outputs the UTC time in Unix format (the number of seconds since Jan. 1, 1970). This is a sequence of 60 bits, where the first and last bits are position markers. The Unix time is therefore encoded as a signed integer with the 58 remaining bits. The first bit in the integer is the LSB, and the last bit is the sign. The reason for using a 58-bit signed int is 1) to avoid the "2038 problem," when a 32-bit signed int rolls over in the year 2038, and 2) to make the sequence 60 bits long, consistent with IRIG-H.
 
