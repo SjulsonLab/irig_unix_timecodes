@@ -1,0 +1,23 @@
+[Unit]
+Description=IRIG/Unix timecode generator with FIFO scheduling
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/IRIG/make_timecodes.py
+
+# Tell systemd we want a FIFO (first-in-first-out) real-time policy
+CPUSchedulingPolicy=fifo
+
+# Priority 90 (range is typically 1..99, higher = more priority)
+CPUSchedulingPriority=90
+
+# Let the process actually use up to priority 90
+LimitRTPRIO=90
+
+# (Optionally) you can confine capabilities:
+# CapabilityBoundingSet=CAP_SYS_NICE
+# AmbientCapabilities=CAP_SYS_NICE
+
+[Install]
+WantedBy=multi-user.target
+
