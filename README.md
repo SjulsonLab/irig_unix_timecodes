@@ -52,7 +52,7 @@ ExecStart=/usr/bin/pigpiod -l -m -s 10
 
 next:\
 sudo systemctl daemon-reload\
-sudo systemctl start pigpiod\
+sudo systemctl start pigpiod
 
 
 -------------------------------
@@ -75,6 +75,6 @@ The next step is to install the timecode generator as a system daemon
 
 sudo cp ~/IRIG/systemctl/*.service /etc/systemd/system\
 sudo systemctl enable irig_unix_timecodes.service\
-sudo systemctl start irig_unix_timecodes.service\
+sudo systemctl start irig_unix_timecodes.service
 
 The timecodes should now run continuously, even after rebooting.
