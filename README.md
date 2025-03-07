@@ -1,6 +1,8 @@
 # irig_unix_timecodes
 Plays IRIG and Unix timecodes on the GPIO pins of a Raspberry Pi 4B
 
+NOTE: THIS CODE HAS NOT BEEN TESTED YET AND SHOULD NOT BE USED FOR EXPERIMENTS
+
 The overarching goal of this project is to enable synchronization of multiple data streams to UTC time, a universal time standard independent of timezone. To this end, we implement IRIG timecodes, a method enabling UTC timestamps to be encoded in sequences of short and long TTL pulses from the Raspberry Pi's GPIO pins that can be sampled by an electrophysiology recording setup or used to blink an LED recorded by an imaging setup. This enables your recordings to be timestamped with the year, date, and time with millisecond precision.
 
 The UTC time comes from the Raspberry Pi's internal clock, which should ideally be synchronized via chrony (a high-precision implementation of NTP, the Network Time Protocol) to a local stratum 1 NTP server with a direct link to GPS satellites. If this is not available to you, chrony will synchronize to an NTP server over the internet, which will lead to timestamps that are less objectively accurate with respect to true UTC time. However, they will still be equally precise, i.e. the frame timestamps for the RPi camera and the IRIG/Unix timecodes will still be internally consistent, which is likely adequate for most experiments.
