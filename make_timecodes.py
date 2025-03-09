@@ -64,7 +64,7 @@ unix_h = TC.Unix60BitGenerator(pi, gpio_pin=9, bit_duration=1.0,  name="Unix-H")
 
 # Precompute wave IDs for next boundary
 now = time.time()
-current_boundary = math.floor(now) + 1
+current_boundary = math.floor(now) + 2.0
 
 wave_ids_for_boundary = TC.build_wave_ids_for_boundary(current_boundary,
                                                     irig_b, irig_e, irig_h,
@@ -79,34 +79,41 @@ try:
         now = time.time()
 
         # # for debugging only
-        # print(f"current_boundary = {current_boundary:.2f}") # wotan
+        # print(f"Now={now:.3f}, boundary={current_boundary:.3f}, leading_silence={current_boundary-now:.3f}")
         # print(f"wake time = {wake_time:.2f}") # wotan
-        # print(f"now = {now:.2f}") # wotan
 
         if wake_time > now:
             time.sleep(wake_time - now)
 
-        # 2) wave_send_once
-        for wid in wave_ids_for_boundary:
-            pi.wave_send_once(wid)
+        # 2) calculate and send waves
+        wave_ids_for_boundary = TC.build_wave_ids_for_boundary(current_boundary,
+                                                    irig_b, irig_e, irig_h,
+                                                    unix_b, unix_e, unix_h)
+        pi.wave_send_once(wave_ids_for_boundary[0])
 
-        # 3) wave_delete old wave IDs
+        # # this was a mistake: pigpiod can only play one wave at a time
+        # 3) wave_send_once
+        # for wid in wave_ids_for_boundary:
+        #     pi.wave_send_once(wid)
+        # print(f"Now={time.time():.3f}, sending waves")
+
+        # 4) wave_delete old wave IDs
         for wid in wave_ids_old:
             pi.wave_delete(wid)
         wave_ids_old = wave_ids_for_boundary
+
+
+        current_boundary += 1
 
         # # for debugging only
         # # 4) If boundary multiple of 10 => debug print
         # if (current_boundary % 10) == 0:
         #     TC.debug_print_bits(current_boundary, [irig_b, irig_e, irig_h, unix_b, unix_e, unix_h])
 
-        # 5) Build wave IDs for next boundary
-        next_boundary = current_boundary + 1
-        wave_ids_for_boundary = TC.build_wave_ids_for_boundary(next_boundary,
-                                                            irig_b, irig_e, irig_h,
-                                                            unix_b, unix_e, unix_h)
+        # current_boundary = next_boundary
+        # print(f"Now={time.time():.3f}, sleeping 0.2 seconds")
 
-        current_boundary = next_boundary
+        time.sleep(0.2)
 
 except KeyboardInterrupt:
     print("Stopping on Ctrl+C.")

@@ -1,7 +1,7 @@
 # irig_unix_timecodes
 Plays IRIG and Unix timecodes on the GPIO pins of a Raspberry Pi 4B
 
-<h1>NOTE: THIS CODE HAS NOT BEEN TESTED YET AND SHOULD NOT BE USED FOR EXPERIMENTS</h1>
+<h1>NOTE: THIS CODE DOESN'T WORK PROPERLY; IT ONLY OUTPUTS THE IRIG B TIMECODE, AND THE PRECISION HAS NOT BEEN MEASURED. DO NOT USED FOR EXPERIMENTS YET</h1>
 
 The overarching goal of this project is to enable synchronization of multiple data streams to UTC time, a universal time standard independent of timezone. To this end, we implement IRIG timecodes, a method enabling UTC timestamps to be encoded in sequences of short and long TTL pulses from the Raspberry Pi's GPIO pins that can be sampled by an electrophysiology recording setup or used to blink an LED recorded by an imaging setup. This enables your recordings to be timestamped with the year, date, and time with millisecond precision.
 
