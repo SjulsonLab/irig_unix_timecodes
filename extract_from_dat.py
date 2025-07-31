@@ -22,8 +22,8 @@ if os.path.exists(input_file):
     date_str = datetime.fromtimestamp(mod_time).strftime('%Y%m%d_%H%M%S')
     
     # Create output filenames with date
-    pps_output = f'pps_binary_{date_str}.npz'
-    irig_output = f'irig_binary_{date_str}.npz'
+    pps_output = f'pps_data_{date_str}.npz'
+    irig_output = f'irig_data_{date_str}.npz'
 else:
     # Fallback if file doesn't exist
     raise FileExistsError(f'The input file \'{input_file}\' does not exist. Are you in the right directory?')
@@ -124,5 +124,5 @@ with open(input_file, 'rb') as f:
     pps_starts = np.array(pps_rising_edges, dtype=np.uint64)
     pps_ends = np.array(pps_falling_edges, dtype=np.uint64)
 
-    np.savez(file=irig_output, array1=irig_starts, array2=irig_ends)
-    np.savez(file=pps_output, array1=pps_starts, array2=pps_ends)
+    np.savez(file=irig_output, starts=irig_starts, ends=irig_ends)
+    np.savez(file=pps_output, starts=pps_starts, ends=pps_ends)

@@ -6,6 +6,7 @@ import datetime
 import pandas as pd
 from threading import Thread
 import math
+import numpy as np
 
 IRIG_BIT = Literal[True,False,'P'] # type for IRIG-H bits
 
@@ -18,9 +19,9 @@ SENDING_HEAD_START = 0.01 # seconds in advance to stop sleeping and start busy w
 # Constants for timecode measuring
 DECODE_BIT_PERIOD = 1 / 30_000 # for now frame rate is 30 kHz
 # pulse length thresholds (in seconds). 
-P_THRESHOLD = 0.75 * SENDING_BIT_LENGTH # for pulse length of 0.8b
-ONE_THRESHOLD = 0.45 * SENDING_BIT_LENGTH # for pulse length of 0.5b
-ZERO_THRESHOLD = 0.05 * SENDING_BIT_LENGTH # for pulse length of 0.2b. This is to make sure error isnt recorded
+P_THRESHOLD = 0.75 * SENDING_BIT_LENGTH / DECODE_BIT_PERIOD # for pulse length of 0.8b
+ONE_THRESHOLD = 0.45 * SENDING_BIT_LENGTH / DECODE_BIT_PERIOD# for pulse length of 0.5b
+ZERO_THRESHOLD = 0.05 * SENDING_BIT_LENGTH / DECODE_BIT_PERIOD # for pulse length of 0.2b. This is to make sure error isnt recorded
 
 # Weights for the encoding values in an IRIG-H timecode
 SECONDS_WEIGHTS = [1, 2, 4, 8, 10, 20, 40]
@@ -60,9 +61,9 @@ def bcd_decode(binary: List[bool], weights: List[int]) -> int:
 
 # ------------------------- IRIG DECODING ------------------------- #
 
-def find_pulse_length(binary_list: Generator[bool]) -> Generator[Tuple[float, int], None, None]:
+def find_pulse_length(binary_list: Generator[bool, None, None]) -> Generator[Tuple[int, int], None, None]:
     """
-    Decodes a sample of measured electrical signals into pulse lengths (in seconds).
+    Decodes a sample of measured electrical signals into pulse lengths (in samples).
     Yields (pulse_length, start_index) tuples one at a time for memory efficiency.
     """
     
@@ -74,7 +75,7 @@ def find_pulse_length(binary_list: Generator[bool]) -> Generator[Tuple[float, in
 
     for bit in binary_list:
         if bit:
-            length += DECODE_BIT_PERIOD
+            length += 1
             if not last_bit:
                 start_index = i
         elif length != 0:
@@ -100,10 +101,13 @@ def identify_pulse_length(length):
         return False
     else: 
         return None
-    
-def to_irig_bits(binary_list: Generator[bool]) -> List[Tuple[IRIG_BIT, float]]:
+
+def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> List[Tuple[int, int]]:
+    return np.column_stack((falling_edges - rising_edges, rising_edges)).tolist()
+
+def to_irig_bits(pulse_info: List[Tuple[int, int]]) -> List[Tuple[IRIG_BIT, float]]:
     print('Converting binary list into IRIG bits...')
-    irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in find_pulse_length(binary_list)]
+    irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in pulse_info]
     print(f'Pulse count: {len(irig_bits)}')
     return irig_bits
 
@@ -123,7 +127,6 @@ def decode_irig_bits(irig_bits: List[Tuple[IRIG_BIT, float]]) -> List[Tuple[floa
     
     print(f'List spliced! Splices: {len(spliced)}')
     return spliced
-
 
 def decode_to_irig_h(binary_list: List[bool]) -> List[IRIG_BIT]:
     """
