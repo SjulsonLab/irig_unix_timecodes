@@ -15,7 +15,7 @@ input_file = 'continuous.dat'  # Change to your .dat file path
 pps_output = 'pps_binary.bin'
 irig_output = 'irig_binary.bin'
 
-chunk_size = 250000  # Samples per chunk (reduced from 1M)
+chunk_size = 2500000  # Samples per chunk (reduced from 1M)
 
 with open(input_file, 'rb') as f:
     chunk_num = 0
@@ -62,13 +62,30 @@ with open(input_file, 'rb') as f:
             irig_binary = (irig_raw > irig_threshold).astype(np.bool_)
             pps_binary = (pps_raw > pps_threshold).astype(np.bool_)
 
-            for i in range(samples_in_chunk):
-                if irig_binary[i] != last_irig_bit:
-                    (irig_rising_edges if irig_binary[i] else irig_falling_edges).append(i + chunk_starting_index)
-                if pps_binary[i] != last_pps_bit:
-                    (pps_rising_edges if pps_binary[i] else pps_falling_edges).append(i + chunk_starting_index)
-                last_irig_bit = irig_binary[i]
-                last_pps_bit = pps_binary[i]
+            # Create arrays with previous state prepended for diff calculation
+            irig_with_prev = np.concatenate(([last_irig_bit], irig_binary))
+            pps_with_prev = np.concatenate(([last_pps_bit], pps_binary))
+
+            # Find where changes occur using diff
+            irig_diffs = np.diff(irig_with_prev.astype(np.int8))
+            pps_diffs = np.diff(pps_with_prev.astype(np.int8))
+
+            # Find rising edges (0->1, diff = 1) and falling edges (1->0, diff = -1)
+            irig_rising_index = np.where(irig_diffs == 1)[0] + chunk_starting_index
+            irig_falling_index = np.where(irig_diffs == -1)[0] + chunk_starting_index
+
+            pps_rising_index = np.where(pps_diffs == 1)[0] + chunk_starting_index
+            pps_falling_index = np.where(pps_diffs == -1)[0] + chunk_starting_index
+
+            # Extend the edge lists
+            irig_rising_edges.extend(irig_rising_index)
+            irig_falling_edges.extend(irig_falling_index)
+            pps_rising_edges.extend(pps_rising_index)
+            pps_falling_edges.extend(pps_falling_index)
+
+            # Update last states
+            last_irig_bit = irig_binary[-1] if len(irig_binary) > 0 else last_irig_bit
+            last_pps_bit = pps_binary[-1] if len(pps_binary) > 0 else last_pps_bit
 
             if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
                 print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round(((chunk_starting_index + chunk_size) / sample_rate) / 3600, 2)} hours)")
