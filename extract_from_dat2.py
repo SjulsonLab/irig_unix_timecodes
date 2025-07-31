@@ -59,14 +59,14 @@ with open(input_file, 'rb') as f:
             pps_raw = chunk_data[:, adc2_index]   # PPS
             
             # Convert to binary using thresholds
-            irig_binary = (irig_raw > irig_threshold).astype(np.bool)
-            pps_binary = (pps_raw > pps_threshold).astype(np.bool)
+            irig_binary = (irig_raw > irig_threshold).astype(np.bool_)
+            pps_binary = (pps_raw > pps_threshold).astype(np.bool_)
 
-            for i in range(chunk_size):
+            for i in range(len(samples_in_chunk)):
                 if irig_binary[i] != last_irig_bit:
                     (irig_rising_edges if irig_binary[i] else irig_falling_edges).append(i + chunk_starting_index)
                 if pps_binary[i] != last_pps_bit:
-                    (pps_rising_edges if irig_binary[i] else pps_falling_edges).append(i + chunk_starting_index)
+                    (pps_rising_edges if pps_binary[i] else pps_falling_edges).append(i + chunk_starting_index)
                 last_irig_bit = irig_binary[i]
                 last_pps_bit = pps_binary[i]
 
