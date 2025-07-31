@@ -1,5 +1,7 @@
 import numpy as np
 import sys
+import os
+from datetime import datetime
 
 total_channels = 40
 adc1_index = 32  # IRIG
@@ -12,10 +14,24 @@ pps_threshold = 2500   # Adjust if needed
 
 # File paths
 input_file = 'continuous.dat'  # Change to your .dat file path
-pps_output = 'pps_binary.bin'
-irig_output = 'irig_binary.bin'
+
+# Generate output filenames with input file's modification date
+if os.path.exists(input_file):
+    # Get file modification time
+    mod_time = os.path.getmtime(input_file)
+    date_str = datetime.fromtimestamp(mod_time).strftime('%Y%m%d_%H%M%S')
+    
+    # Create output filenames with date
+    pps_output = f'pps_binary_{date_str}.npz'
+    irig_output = f'irig_binary_{date_str}.npz'
+else:
+    # Fallback if file doesn't exist
+    raise FileExistsError(f'The input file \'{input_file}\' does not exist. Are you in the right directory?')
 
 chunk_size = 2500000  # Samples per chunk (reduced from 1M)
+
+print(f"Processing {input_file}")
+print(f"Output files will be: {pps_output}, {irig_output}")
 
 with open(input_file, 'rb') as f:
     chunk_num = 0
