@@ -71,7 +71,7 @@ with open(input_file, 'rb') as f:
                 last_pps_bit = pps_binary[i]
 
             if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
-                print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round((chunk_starting_index + chunk_size / sample_rate) / 3600, 2)} hours)")
+                print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round(((chunk_starting_index + chunk_size) / sample_rate) / 3600, 2)} hours)")
                 sys.stdout.flush()
                 
             # Heartbeat every 5 chunks (more frequent due to smaller chunks)
