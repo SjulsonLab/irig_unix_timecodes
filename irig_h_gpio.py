@@ -107,7 +107,7 @@ def to_irig_bits(binary_list: Generator[bool]) -> List[Tuple[IRIG_BIT, float]]:
     print('Converting binary list into IRIG bits...')
     for (pulse_length, starting_index) in find_pulse_length(binary_list):
         print((identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD))
-    # irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in find_pulse_length(binary_list)]
+    irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in find_pulse_length(binary_list)]
     print(f'Pulse count: {len(irig_bits)}')
     return irig_bits
 
