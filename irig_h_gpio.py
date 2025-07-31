@@ -73,7 +73,6 @@ def find_pulse_length(binary_list: Generator[bool]) -> Generator[Tuple[float, in
     print('Deciphering pulse lengths.')
 
     for bit in binary_list:
-        print(bit)
         if bit:
             length += DECODE_BIT_PERIOD
             if not last_bit:
@@ -93,7 +92,6 @@ def find_pulse_length(binary_list: Generator[bool]) -> Generator[Tuple[float, in
         yield (length, start_index)
 
 def identify_pulse_length(length):
-    print(length)
     if length > P_THRESHOLD:
         return 'P'
     if length > ONE_THRESHOLD:
@@ -105,8 +103,6 @@ def identify_pulse_length(length):
     
 def to_irig_bits(binary_list: Generator[bool]) -> List[Tuple[IRIG_BIT, float]]:
     print('Converting binary list into IRIG bits...')
-    for (pulse_length, starting_index) in find_pulse_length(binary_list):
-        print((identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD))
     irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in find_pulse_length(binary_list)]
     print(f'Pulse count: {len(irig_bits)}')
     return irig_bits

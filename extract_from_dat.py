@@ -101,7 +101,7 @@ try:
                     
                     # More frequent progress updates
                     if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
-                        print(f"Chunk {chunk_num}: {total_samples:,} samples processed")
+                        print(f"Chunk {chunk_num}: {total_samples:,} samples processed, ({round((total_samples / sample_rate) / 3600, 2)} hours)")
                         print(f"  PPS HIGH: {100*pps_high_count/total_samples:.1f}%")
                         print(f"  IRIG HIGH: {100*irig_high_count/total_samples:.1f}%")
                         sys.stdout.flush()

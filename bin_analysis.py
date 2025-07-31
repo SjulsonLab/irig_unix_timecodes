@@ -5,11 +5,12 @@ import os
 import irig_h_gpio as irig
 import numpy as np
 
-irig_file = "data/binary/irig_binary.bin"
-pps_file = "data/binary/pps_binary.bin"
+irig_file = "data/binary/irig_binary2.bin"
+pps_file = "data/binary/pps_binary2.bin"
 
 error_filename = 'data/indexes_of_error.csv'
 decoded_filename = 'data/decoded_timecodes.csv'
+pulselength_filename = 'data/pulse_lengths.csv'
 
 def byte_unpack_generator(file_path: str, chunk_size: int = 1024*1024, total_samples: int = None) -> Generator[bool, None, None]:
     """
@@ -68,11 +69,14 @@ def find_errors(irig: Generator[bool, None, None], pps: Generator[bool, None, No
     print(f'Processing complete. Total bits: {processed_bits}, errors found: {len(errors_index_length)}')
     return errors_index_length
 
-def error_analysis():
-    print('Unpacking irig bytes into bits.')
-    irig_gen = byte_unpack_generator(irig_file)
-    print('Unpacking pps bytes into bits.')
-    pps_gen = byte_unpack_generator(pps_file)
+def error_analysis(irig_gen=None, pps_gen=None):
+    if irig_gen is None:
+        print('Unpacking irig bytes into bits.')
+        irig_gen = byte_unpack_generator(irig_file)
+
+    if pps_gen is None:
+        print('Unpacking pps bytes into bits.')
+        pps_gen = byte_unpack_generator(pps_file)
 
     print('Unpacking done. Calculating errors...')
     # This means, the amount of samples taken where the PPS pulse has started and the IRIG timecode has not.
@@ -87,9 +91,10 @@ def error_analysis():
 
     print('File writing done. Enjoy!')
 
-def decode_analysis():
-    print('Unpacking irig bytes into bits.')
-    irig_gen = byte_unpack_generator(irig_file)
+def decode_analysis(irig_gen=None):
+    if irig_gen is None:
+        print('Unpacking irig bytes into bits.')
+        irig_gen = byte_unpack_generator(irig_file)
     
     print('Unpacking done. Decoding IRIG-H timecodes.')
     decoded = irig.decode_irig_bits(irig.to_irig_bits(irig_gen))
@@ -102,6 +107,17 @@ def decode_analysis():
 
     print('File writing done. Enjoy!')
 
+def get_pulse_lengths():
+    print('Unpacking irig bytes into bits.')
+    irig_gen = byte_unpack_generator(irig_file)
+
+    print('Unpacking done. Decoding IRIG-H timecodes.')
+    pulse_lengths = irig.find_pulse_length(irig_gen)
+
+    with open(pulselength_filename, 'w', newline='') as file:
+        csv_writer = csv.writer(file)
+        for pulse_length in pulse_lengths:
+            csv_writer.writerow(pulse_length)
 
 irig_size = os.path.getsize(irig_file)
 pps_size = os.path.getsize(pps_file)
@@ -109,7 +125,10 @@ min_size = min(irig_size, pps_size)
 
 print(f'File sizes - IRIG: {irig_size}, PPS: {pps_size}, processing: {min_size} bytes')
 
-# decode_analysis()
-for bit in byte_unpack_generator(irig_file):
-    print(bit)
+# get_pulse_lengths()
+# for bit in matlab_style_unpack_generator(irig_file):
+#     print(bit)
+
+irig_gen = byte_unpack_generator(irig_file)
+error_analysis(irig_gen=irig_gen)
 
