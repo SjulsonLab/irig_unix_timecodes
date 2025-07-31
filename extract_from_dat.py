@@ -1,7 +1,8 @@
 import numpy as np
 import sys
+import os
+from datetime import datetime
 
-# Configuration
 total_channels = 40
 adc1_index = 32  # IRIG
 adc2_index = 33  # PPS
@@ -13,125 +14,115 @@ pps_threshold = 2500   # Adjust if needed
 
 # File paths
 input_file = 'continuous.dat'  # Change to your .dat file path
-pps_output = 'pps_binary.bin'
-irig_output = 'irig_binary.bin'
 
-# Process in chunks - smaller chunks for better I/O performance
-chunk_size = 250000  # Samples per chunk (reduced from 1M)
+# Generate output filenames with input file's modification date
+if os.path.exists(input_file):
+    # Get file modification time
+    mod_time = os.path.getmtime(input_file)
+    date_str = datetime.fromtimestamp(mod_time).strftime('%Y%m%d_%H%M%S')
+    
+    # Create output filenames with date
+    pps_output = f'pps_binary_{date_str}.npz'
+    irig_output = f'irig_binary_{date_str}.npz'
+else:
+    # Fallback if file doesn't exist
+    raise FileExistsError(f'The input file \'{input_file}\' does not exist. Are you in the right directory?')
 
-print("Processing file with bit-packing and proper thresholds...")
-print(f"Input file: {input_file}")
-print(f"Chunk size: {chunk_size:,} samples")
+chunk_size = 2500000  # Samples per chunk (reduced from 1M)
 
-def pack_bits_to_file(binary_data, file_handle):
-    """Pack binary data (0s and 1s) into bits and write to file"""
-    try:
-        # Pad to multiple of 8
-        padded_length = ((len(binary_data) + 7) // 8) * 8
-        if len(binary_data) % 8 != 0:
-            padding = np.zeros(padded_length - len(binary_data), dtype=np.uint8)
-            padded_data = np.concatenate([binary_data, padding])
-        else:
-            padded_data = binary_data
-        
-        # Pack 8 bits into each byte
-        packed = np.packbits(padded_data)
-        file_handle.write(packed.tobytes())
-        return len(packed)
-    except Exception as e:
-        print(f"Error in pack_bits_to_file: {e}")
-        return 0
+print(f"Processing {input_file}")
+print(f"Output files will be: {pps_output}, {irig_output}")
 
-try:
-    with open(pps_output, 'wb') as pps_file, open(irig_output, 'wb') as irig_file:
-        with open(input_file, 'rb') as f:
-            chunk_num = 0
-            total_samples = 0
-            pps_bytes_written = 0
-            irig_bytes_written = 0
-            pps_high_count = 0
-            irig_high_count = 0
+with open(input_file, 'rb') as f:
+    chunk_num = 0
+
+    last_irig_bit = False
+    last_pps_bit = False
+
+    irig_rising_edges = []
+    irig_falling_edges = []
+    
+    pps_rising_edges = []
+    pps_falling_edges = []
+    
+    while True:
+        try:
+            chunk_starting_index = chunk_num * chunk_size
+            # Calculate bytes to read
+            bytes_per_sample = 2 * total_channels
+            chunk_bytes = chunk_size * bytes_per_sample
             
-            while True:
-                try:
-                    # Calculate bytes to read
-                    bytes_per_sample = 2 * total_channels
-                    chunk_bytes = chunk_size * bytes_per_sample
-                    
-                    # Read chunk
-                    raw_chunk = f.read(chunk_bytes)
-                    if len(raw_chunk) == 0:
-                        print("Reached end of file")
-                        break
-                        
-                    # Convert to int16 array
-                    int16_data = np.frombuffer(raw_chunk, dtype=np.int16)
-                    samples_in_chunk = len(int16_data) // total_channels
-                    
-                    if samples_in_chunk == 0:
-                        print("No complete samples in chunk")
-                        break
-                        
-                    # Reshape and extract channels
-                    int16_data = int16_data[:samples_in_chunk * total_channels]
-                    chunk_data = int16_data.reshape(samples_in_chunk, total_channels)
-                    
-                    # Extract ADC channels
-                    irig_raw = chunk_data[:, adc1_index]  # IRIG
-                    pps_raw = chunk_data[:, adc2_index]   # PPS
-                    
-                    # Convert to binary using thresholds
-                    irig_binary = (irig_raw > irig_threshold).astype(np.uint8)
-                    pps_binary = (pps_raw > pps_threshold).astype(np.uint8)
-                    
-                    # Count high states for statistics
-                    pps_high_count += np.sum(pps_binary)
-                    irig_high_count += np.sum(irig_binary)
-                    
-                    # Pack and write to files
-                    pps_bytes_written += pack_bits_to_file(pps_binary, pps_file)
-                    irig_bytes_written += pack_bits_to_file(irig_binary, irig_file)
-                    
-                    # Force buffer flush to disk every chunk
-                    pps_file.flush()
-                    irig_file.flush()
-                    
-                    total_samples += samples_in_chunk
-                    chunk_num += 1
-                    
-                    # More frequent progress updates
-                    if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
-                        print(f"Chunk {chunk_num}: {total_samples:,} samples processed, ({round((total_samples / sample_rate) / 3600, 2)} hours)")
-                        print(f"  PPS HIGH: {100*pps_high_count/total_samples:.1f}%")
-                        print(f"  IRIG HIGH: {100*irig_high_count/total_samples:.1f}%")
-                        sys.stdout.flush()
-                        
-                    # Heartbeat every 5 chunks (more frequent due to smaller chunks)
-                    elif chunk_num % 5 == 0:
-                        print(f"Chunk {chunk_num}... ", end="", flush=True)
-                        
-                except Exception as e:
-                    print(f"Error processing chunk {chunk_num}: {e}")
-                    print(f"Chunk size was: {len(raw_chunk)} bytes")
-                    break
+            # Read chunk
+            raw_chunk = f.read(chunk_bytes)
+            if len(raw_chunk) == 0:
+                print("Reached end of file")
+                break
+                
+            # Convert to int16 array
+            int16_data = np.frombuffer(raw_chunk, dtype=np.int16)
+            samples_in_chunk = len(int16_data) // total_channels
+            
+            if samples_in_chunk == 0:
+                print("No complete samples in chunk")
+                break
+                
+            # Reshape and extract channels
+            int16_data = int16_data[:samples_in_chunk * total_channels]
+            chunk_data = int16_data.reshape(samples_in_chunk, total_channels)
+            
+            # Extract ADC channels
+            irig_raw = chunk_data[:, adc1_index]  # IRIG
+            pps_raw = chunk_data[:, adc2_index]   # PPS
+            
+            # Convert to binary using thresholds
+            irig_binary = (irig_raw > irig_threshold).astype(np.bool_)
+            pps_binary = (pps_raw > pps_threshold).astype(np.bool_)
 
-    print(f"\nProcessing complete!")
-    print(f"Total samples: {total_samples:,}")
-    print(f"Duration: {total_samples / sample_rate:.2f} seconds")
-    print(f"PPS HIGH states: {100*pps_high_count/total_samples:.1f}%")
-    print(f"IRIG HIGH states: {100*irig_high_count/total_samples:.1f}%")
-    print(f"Output files (bit-packed):")
-    print(f"  PPS: {pps_output} ({pps_bytes_written:,} bytes, {pps_bytes_written/1024/1024:.1f} MB)")
-    print(f"  IRIG: {irig_output} ({irig_bytes_written:,} bytes, {irig_bytes_written/1024/1024:.1f} MB)")
+            # Create arrays with previous state prepended for diff calculation
+            irig_with_prev = np.concatenate(([last_irig_bit], irig_binary))
+            pps_with_prev = np.concatenate(([last_pps_bit], pps_binary))
 
-    # Instructions for reading back
-    print(f"\nTo read the data back:")
-    print(f"pps_packed = np.fromfile('{pps_output}', dtype=np.uint8)")
-    print(f"pps_data = np.unpackbits(pps_packed)[:total_samples]  # Trim padding")
-    print(f"irig_packed = np.fromfile('{irig_output}', dtype=np.uint8)")
-    print(f"irig_data = np.unpackbits(irig_packed)[:total_samples]  # Trim padding")
+            # Find where changes occur using diff
+            irig_diffs = np.diff(irig_with_prev.astype(np.int8))
+            pps_diffs = np.diff(pps_with_prev.astype(np.int8))
 
-except Exception as e:
-    print(f"Fatal error: {e}")
-    import traceback
-    traceback.print_exc()
+            # Find rising edges (0->1, diff = 1) and falling edges (1->0, diff = -1)
+            irig_rising_index = np.where(irig_diffs == 1)[0] + chunk_starting_index
+            irig_falling_index = np.where(irig_diffs == -1)[0] + chunk_starting_index
+
+            pps_rising_index = np.where(pps_diffs == 1)[0] + chunk_starting_index
+            pps_falling_index = np.where(pps_diffs == -1)[0] + chunk_starting_index
+
+            # Extend the edge lists
+            irig_rising_edges.extend(irig_rising_index)
+            irig_falling_edges.extend(irig_falling_index)
+            pps_rising_edges.extend(pps_rising_index)
+            pps_falling_edges.extend(pps_falling_index)
+
+            # Update last states
+            last_irig_bit = irig_binary[-1] if len(irig_binary) > 0 else last_irig_bit
+            last_pps_bit = pps_binary[-1] if len(pps_binary) > 0 else last_pps_bit
+
+            if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
+                print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round(((chunk_starting_index + chunk_size) / sample_rate) / 3600, 2)} hours)")
+                sys.stdout.flush()
+                
+            # Heartbeat every 5 chunks (more frequent due to smaller chunks)
+            elif chunk_num % 5 == 0:
+                print(f"Chunk {chunk_num}... ", end="", flush=True)
+                
+        except Exception as e:
+            print(f"Error processing chunk {chunk_num}: {e}")
+            print(f"Chunk size was: {len(raw_chunk)} bytes")
+            break
+        finally:
+            chunk_num += 1
+
+    irig_starts = np.array(irig_rising_edges, dtype=np.uint64)
+    irig_ends = np.array(irig_falling_edges, dtype=np.uint64)
+
+    pps_starts = np.array(pps_rising_edges, dtype=np.uint64)
+    pps_ends = np.array(pps_falling_edges, dtype=np.uint64)
+
+    np.savez(file=irig_output, array1=irig_starts, array2=irig_ends)
+    np.savez(file=pps_output, array1=pps_starts, array2=pps_ends)
