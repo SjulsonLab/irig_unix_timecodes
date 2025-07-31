@@ -62,7 +62,7 @@ with open(input_file, 'rb') as f:
             irig_binary = (irig_raw > irig_threshold).astype(np.bool_)
             pps_binary = (pps_raw > pps_threshold).astype(np.bool_)
 
-            for i in range(len(samples_in_chunk)):
+            for i in range(samples_in_chunk):
                 if irig_binary[i] != last_irig_bit:
                     (irig_rising_edges if irig_binary[i] else irig_falling_edges).append(i + chunk_starting_index)
                 if pps_binary[i] != last_pps_bit:
