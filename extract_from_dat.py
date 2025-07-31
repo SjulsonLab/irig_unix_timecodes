@@ -8,8 +8,8 @@ adc2_index = 33  # PPS
 sample_rate = 30000
 
 # Thresholds based on your debug output
-irig_threshold = 10000  # Adjust if needed
-pps_threshold = 10000   # Adjust if needed
+irig_threshold = 2500  # Adjust if needed
+pps_threshold = 2500   # Adjust if needed
 
 # File paths
 input_file = 'continuous.dat'  # Change to your .dat file path

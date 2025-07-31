@@ -1,4 +1,4 @@
-from typing import List, Tuple, Literal
+from typing import Generator, List, Tuple, Literal
 import pigpio
 import time
 from datetime import datetime as dt
@@ -7,8 +7,7 @@ import pandas as pd
 from threading import Thread
 import math
 
-IRIG_BIT = Literal[0,1,'P'] # type for IRIG-H bits
-BINARY_BIT = Literal[0,1] # type for binary bits
+IRIG_BIT = Literal[True,False,'P'] # type for IRIG-H bits
 
 SENDING_BIT_LENGTH = 1 # seconds
 
@@ -17,7 +16,7 @@ MEASURED_DELAY = 0 # The constant delay between GPS PPS and the RPi PPS in secon
 SENDING_HEAD_START = 0.01 # seconds in advance to stop sleeping and start busy waiting
 
 # Constants for timecode measuring
-DECODE_BIT_PERIOD = 1 / 30_000 # for now frame rate is 25 kHz
+DECODE_BIT_PERIOD = 1 / 30_000 # for now frame rate is 30 kHz
 # pulse length thresholds (in seconds). 
 P_THRESHOLD = 0.75 * SENDING_BIT_LENGTH # for pulse length of 0.8b
 ONE_THRESHOLD = 0.45 * SENDING_BIT_LENGTH # for pulse length of 0.5b
@@ -34,20 +33,20 @@ YEARS_WEIGHTS = [1, 2, 4, 8, 10, 20, 40, 80]
 # ------------------------- BCD UTILITIES ------------------------- #
 # These are used for encoding and decoding IRIG-H timecodes.
 
-def bcd_encode(value: int, weights: List[int]) -> List[BINARY_BIT]:
+def bcd_encode(value: int, weights: List[int]) -> List[bool]:
     """
     Encodes an integer value into Binary Coded Decimal (BCD) format using specified weights.
     This method assumes that the value is representable as a sum of a subset of the weights.
     """
 
-    bcd_list = [0] * len(weights)
+    bcd_list = [False] * len(weights)
     for i in reversed(range(len(weights))):
         if weights[i] <= value:
-            bcd_list[i] = 1
+            bcd_list[i] = True
             value -= weights[i]
     return bcd_list
 
-def bcd_decode(binary: List[BINARY_BIT], weights: List[int]) -> int:
+def bcd_decode(binary: List[bool], weights: List[int]) -> int:
     """
     Decodes a Binary Coded Decimal (BCD) format using a dot product with the binary list and the weights.
     This method assumes that the value is representable as a sum of a subset of the weights.
@@ -55,44 +54,80 @@ def bcd_decode(binary: List[BINARY_BIT], weights: List[int]) -> int:
 
     total = 0
     for weight, bit in zip(weights, binary):
-        total += bit * weight
+        if bit:
+            total +=  weight
     return total
 
 # ------------------------- IRIG DECODING ------------------------- #
 
-def find_pulse_length(binary_list: List[bool]) -> List[float]:
+def find_pulse_length(binary_list: Generator[bool]) -> Generator[Tuple[float, int], None, None]:
     """
-    Decodes a sample of measured electrical signals into a list of pulse lengths (in seconds).
+    Decodes a sample of measured electrical signals into pulse lengths (in seconds).
+    Yields (pulse_length, start_index) tuples one at a time for memory efficiency.
     """
-
-    if len(binary_list) < 2:
-        print("Inputted data set is too short.")
-        return []
     
-    pulse_length_list = []
     length = 0
-    for i in binary_list:
-        if i:
-            length += DECODE_BIT_PERIOD
-        elif length == 0:
-            continue
-        else:
-            pulse_length_list.append(length)
-            length = 0
-    if length != 0:
-        pulse_length_list.append(length)
+    i = 0
+    last_bit = False
+    start_index = None
+    print('Deciphering pulse lengths.')
 
-    return pulse_length_list
+    for bit in binary_list:
+        print(bit)
+        if bit:
+            length += DECODE_BIT_PERIOD
+            if not last_bit:
+                start_index = i
+        elif length != 0:
+            if start_index is not None:
+                yield (length, start_index)
+            length = 0
+            start_index = None
+        last_bit = bit
+        i += 1
+        if i % 100_000_000 == 0:
+            print(f'Samples iterated: {i}. Hours of measurement: {round(i * DECODE_BIT_PERIOD / 3600, 2)}')
+
+    # Yield final pulse if it exists
+    if length != 0 and start_index is not None:
+        yield (length, start_index)
 
 def identify_pulse_length(length):
+    print(length)
     if length > P_THRESHOLD:
         return 'P'
     if length > ONE_THRESHOLD:
-        return 1
+        return True
     if length > ZERO_THRESHOLD:
-        return 0
+        return False
     else: 
         return None
+    
+def to_irig_bits(binary_list: Generator[bool]) -> List[Tuple[IRIG_BIT, float]]:
+    print('Converting binary list into IRIG bits...')
+    for (pulse_length, starting_index) in find_pulse_length(binary_list):
+        print((identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD))
+    # irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in find_pulse_length(binary_list)]
+    print(f'Pulse count: {len(irig_bits)}')
+    return irig_bits
+
+def decode_irig_bits(irig_bits: List[Tuple[IRIG_BIT, float]]) -> List[Tuple[float, float]]:
+    for i in range(120): # account for starting in the middle of the starting position marker. Find starting bit
+        if irig_bits[i][0] == 'P' and irig_bits[i+1][0] == 'P':
+            starting_index = i + 1
+            break
+    
+    if 'starting_index' not in locals():
+        raise ValueError("No starting position marker found.")
+    print(f'Decoding  starting index: {starting_index}\nSplicing list...')
+    
+    spliced = []
+    for i in range(starting_index, len(irig_bits) - 60, 60):
+        spliced.append((irig_h_to_posix([t[0] for t in irig_bits[i:i+60]]), irig_bits[i][1]))
+    
+    print(f'List spliced! Splices: {len(spliced)}')
+    return spliced
+
 
 def decode_to_irig_h(binary_list: List[bool]) -> List[IRIG_BIT]:
     """
@@ -165,38 +200,24 @@ def splice_binary_generator(binary_list):
     Memory efficient for large datasets.
     """
     
-    binary_iter = iter(binary_list)
-    try:
-        first_bit = next(binary_iter)
-    except StopIteration:
+    # Find all timecode start positions
+    starts = find_timecode_starts(binary_list)
+    
+    if len(starts) < 2:
+        # Not enough complete timecodes
         return
     
-    # Track state for finding timecode starts
-    flips = 1 if first_bit else 0
-    prev_bit = first_bit
-    current_segment = [first_bit]
-    segment_start_index = 0
-    current_index = 1
+    # Convert binary_list to a list if it's a generator
+    if hasattr(binary_list, '__iter__') and not hasattr(binary_list, '__getitem__'):
+        binary_list = list(binary_list)
     
-    for current_bit in binary_iter:
-        current_segment.append(current_bit)
-        
-        if current_bit != prev_bit:
-            flips += 1
-            # Check if this marks a new timecode start (every 120 flips)
-            if (flips - 1) % 120 == 0 and len(current_segment) > 1:
-                # Yield the completed segment (excluding the current bit which starts the next segment)
-                yield (current_segment[:-1], segment_start_index * DECODE_BIT_PERIOD)
-                # Start new segment with the current bit
-                current_segment = [current_bit]
-                segment_start_index = current_index
-        
-        prev_bit = current_bit
-        current_index += 1
-    
-    # Yield any remaining segment
-    if len(current_segment) > 1:
-        yield (current_segment, segment_start_index * DECODE_BIT_PERIOD)
+    # Yield segments between consecutive start positions
+    for i in range(len(starts) - 1):
+        start_idx = starts[i]
+        end_idx = starts[i + 1]
+        segment = binary_list[start_idx:end_idx]
+        timestamp = start_idx * DECODE_BIT_PERIOD
+        yield (segment, timestamp)
 
 def splice_binary_list(binary_list) -> List[Tuple[List[bool], float]]:
     """
@@ -353,7 +374,7 @@ class IrigHSender:
     def calculate_pulse_length(self, bit: IRIG_BIT) -> float:
             if bit == 'P':
                 return 0.8 * SENDING_BIT_LENGTH
-            elif bit == 1:
+            elif bit == True:
                 return 0.5 * SENDING_BIT_LENGTH
             else:
                 return 0.2 * SENDING_BIT_LENGTH
