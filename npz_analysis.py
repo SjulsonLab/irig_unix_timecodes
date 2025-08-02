@@ -27,10 +27,24 @@ def error_analysis():
 
     for irig_start, pps_start in zip(irig_starts, pps_starts):
         error = irig_start - pps_start
-        # while error < -SAMPLE_RATE * (0.95 + jumps):
-        #     jumps +=1
-        #     result.append('JUMP')
+        while error < -SAMPLE_RATE * (0.95 + jumps):
+            jumps +=1
+            result.append('JUMP')
         result.append(error + (SAMPLE_RATE * jumps))
+
+    cumulative = 0
+    no_outliers = [r for r in result if type(r) != str and r < 15]
+    for d in no_outliers:
+        cumulative += d
+    cumulative /= len(no_outliers)
+    print(f'Average index delay without outliers: {cumulative}\nSeconds: {cumulative/SAMPLE_RATE}')
+    cumulative = 0
+    with_outliers = [r for r in result if type(r) != str]
+    for d in with_outliers:
+        cumulative += d
+    cumulative /= len(with_outliers)
+    print(f'Average index delay with outliers: {cumulative}\nSeconds: {cumulative/SAMPLE_RATE}')
+
 
     with open(error_filename, 'w', newline='') as file:
         csv_writer = csv.writer(file)
@@ -47,3 +61,5 @@ def decode_analysis():
         csv_writer = csv.writer(file)
         csv_writer.writerows(decoded)
 
+error_analysis()
+decode_analysis()
