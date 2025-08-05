@@ -102,9 +102,6 @@ def identify_pulse_length(length):
     else: 
         return None
 
-def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> List[Tuple[int, int]]:
-    return np.column_stack((falling_edges - rising_edges, rising_edges)).tolist()
-
 def to_irig_bits(pulse_info: List[Tuple[int, int]]) -> List[Tuple[IRIG_BIT, float]]:
     print('Converting binary list into IRIG bits...')
     irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in pulse_info]

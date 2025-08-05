@@ -139,10 +139,6 @@ with open(input_file, 'rb') as f:
             print(f"Chunk size was: {len(raw_chunk)} bytes")
             break
         finally:
-            del chunk_data, irig_raw, pps_raw, irig_binary, pps_binary
-            del irig_with_prev, pps_with_prev, irig_diffs, pps_diffs
-            del irig_rising_index, irig_falling_index, pps_rising_index, pps_falling_index
-
             chunk_num += 1
 
     np.savez(file=irig_output, starts=irig_rising_edges, ends=irig_falling_edges)
