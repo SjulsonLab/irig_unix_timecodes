@@ -2,6 +2,7 @@ import numpy as np
 import sys
 import os
 from datetime import datetime
+import gc
 
 total_channels = 40
 adc1_index = 32  # IRIG
@@ -109,7 +110,11 @@ with open(input_file, 'rb') as f:
             last_irig_bit = irig_binary[-1] if len(irig_binary) > 0 else last_irig_bit
             last_pps_bit = pps_binary[-1] if len(pps_binary) > 0 else last_pps_bit
 
-            if chunk_num % 100 == 0:
+            if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
+                print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round(((chunk_starting_index + chunk_size) / sample_rate) / 3600, 2)} hours)")
+                sys.stdout.flush()
+            
+            if chunk_num % 50 == 0:
                 print("Flushing python lists to numpy arrays.")
                 irig_rising_edges = np.concatenate((irig_rising_edges, np.fromiter(irig_rising_edges_list,dtype=np.int64)))
                 irig_falling_edges = np.concatenate((irig_falling_edges, np.fromiter(irig_falling_edges_list,dtype=np.int64)))
@@ -122,20 +127,22 @@ with open(input_file, 'rb') as f:
                 pps_rising_edges_list.clear()
                 pps_falling_edges_list.clear()
 
-
-            if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
-                print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round(((chunk_starting_index + chunk_size) / sample_rate) / 3600, 2)} hours)")
-                sys.stdout.flush()
-
             # Heartbeat every 5 chunks (more frequent due to smaller chunks)
             elif chunk_num % 5 == 0:
                 print(f"Chunk {chunk_num}... ", end="", flush=True)
+
+            if chunk_num % 10 == 0:
+                gc.collect()
                 
         except Exception as e:
             print(f"Error processing chunk {chunk_num}: {e}")
             print(f"Chunk size was: {len(raw_chunk)} bytes")
             break
         finally:
+            del chunk_data, irig_raw, pps_raw, irig_binary, pps_binary
+            del irig_with_prev, pps_with_prev, irig_diffs, pps_diffs
+            del irig_rising_index, irig_falling_index, pps_rising_index, pps_falling_index
+
             chunk_num += 1
 
     np.savez(file=irig_output, starts=irig_rising_edges, ends=irig_falling_edges)
