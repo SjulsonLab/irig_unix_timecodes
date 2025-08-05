@@ -39,11 +39,17 @@ with open(input_file, 'rb') as f:
     last_irig_bit = False
     last_pps_bit = False
 
-    irig_rising_edges = []
-    irig_falling_edges = []
+    irig_rising_edges_list = []
+    irig_falling_edges_list = []
     
-    pps_rising_edges = []
-    pps_falling_edges = []
+    pps_rising_edges_list = []
+    pps_falling_edges_list = []
+
+    irig_rising_edges = np.empty(0, dtype=np.int64)
+    irig_falling_edges = np.empty(0, dtype=np.int64)
+    pps_rising_edges = np.empty(0, dtype=np.int64)
+    pps_falling_edges = np.empty(0, dtype=np.int64)
+
     
     while True:
         try:
@@ -94,19 +100,33 @@ with open(input_file, 'rb') as f:
             pps_falling_index = np.where(pps_diffs == -1)[0] + chunk_starting_index
 
             # Extend the edge lists
-            irig_rising_edges.extend(irig_rising_index)
-            irig_falling_edges.extend(irig_falling_index)
-            pps_rising_edges.extend(pps_rising_index)
-            pps_falling_edges.extend(pps_falling_index)
+            irig_rising_edges_list.extend(irig_rising_index)
+            irig_falling_edges_list.extend(irig_falling_index)
+            pps_rising_edges_list.extend(pps_rising_index)
+            pps_falling_edges_list.extend(pps_falling_index)
 
             # Update last states
             last_irig_bit = irig_binary[-1] if len(irig_binary) > 0 else last_irig_bit
             last_pps_bit = pps_binary[-1] if len(pps_binary) > 0 else last_pps_bit
 
+            if chunk_num % 100 == 0:
+                print("Flushing python lists to numpy arrays.")
+                irig_rising_edges = np.concatenate((irig_rising_edges, np.fromiter(irig_rising_edges_list,dtype=np.int64)))
+                irig_falling_edges = np.concatenate((irig_falling_edges, np.fromiter(irig_falling_edges_list,dtype=np.int64)))
+                pps_rising_edges = np.concatenate((pps_rising_edges, np.fromiter(pps_rising_edges_list,dtype=np.int64)))
+                pps_falling_edges = np.concatenate((pps_falling_edges, np.fromiter(pps_falling_edges_list,dtype=np.int64)))
+
+                irig_rising_edges_list.clear()
+                irig_falling_edges_list.clear()
+    
+                pps_rising_edges_list.clear()
+                pps_falling_edges_list.clear()
+
+
             if chunk_num % 20 == 0:  # Every 20 chunks instead of 50
                 print(f"Chunk {chunk_num}: {chunk_starting_index + chunk_size:,} samples processed, ({round(((chunk_starting_index + chunk_size) / sample_rate) / 3600, 2)} hours)")
                 sys.stdout.flush()
-                
+
             # Heartbeat every 5 chunks (more frequent due to smaller chunks)
             elif chunk_num % 5 == 0:
                 print(f"Chunk {chunk_num}... ", end="", flush=True)
@@ -118,11 +138,5 @@ with open(input_file, 'rb') as f:
         finally:
             chunk_num += 1
 
-    irig_starts = np.array(irig_rising_edges, dtype=np.uint64)
-    irig_ends = np.array(irig_falling_edges, dtype=np.uint64)
-
-    pps_starts = np.array(pps_rising_edges, dtype=np.uint64)
-    pps_ends = np.array(pps_falling_edges, dtype=np.uint64)
-
-    np.savez(file=irig_output, starts=irig_starts, ends=irig_ends)
-    np.savez(file=pps_output, starts=pps_starts, ends=pps_ends)
+    np.savez(file=irig_output, starts=irig_rising_edges, ends=irig_falling_edges)
+    np.savez(file=pps_output, starts=pps_rising_edges, ends=pps_falling_edges)
