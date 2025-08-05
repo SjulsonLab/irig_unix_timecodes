@@ -4,6 +4,7 @@ import glob
 import os
 import csv
 import irig_h_gpio as irig
+import threading
 
 irig_filename = max(glob.glob("data/irig_data_*.npz"), key=os.path.getmtime)
 pps_filename = max(glob.glob("data/pps_data_*.npz"), key=os.path.getmtime)
@@ -20,6 +21,7 @@ def find_sample_rate():
     return round(np.diff(irig_starts).mean(), 0)
     
 sample_rate = find_sample_rate()
+print(f'Sample rate: {sample_rate}')
 
 def error_analysis():
     jumps = 0
@@ -68,3 +70,8 @@ def decode_analysis():
 
         csv_writer = csv.writer(file)
         csv_writer.writerows(decoded)
+
+error_thread = threading.Thread(target=error_analysis)
+decode_thread = threading.Thread(target=decode_analysis)
+error_thread.start()
+decode_thread.start()
