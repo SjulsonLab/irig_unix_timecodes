@@ -118,7 +118,7 @@ with open(input_file, 'rb') as f:
             elif chunk_num % 5 == 0:
                 print(f"Chunk {chunk_num}... ", end="", flush=True)
             
-            if chunk_num % 50 == 0:
+            if chunk_num % 40 == 0:
                 print("Flushing python lists to numpy arrays.")
                 irig_rising_edges = np.concatenate((irig_rising_edges, np.fromiter(irig_rising_edges_list,dtype=np.int64)))
                 irig_falling_edges = np.concatenate((irig_falling_edges, np.fromiter(irig_falling_edges_list,dtype=np.int64)))
