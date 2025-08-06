@@ -73,6 +73,7 @@ static const int YEARS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80};
 // IRIG-H Sender structure
 typedef struct {
     int sending_gpio_pin;
+    int inverted_gpio_pin;
     pthread_t sender_thread;
     bool running;
     double_array_t encoded_times;
@@ -88,6 +89,7 @@ typedef struct {
     volatile unsigned *gpio_set_reg;
     volatile unsigned *gpio_clr_reg;
     uint32_t gpio_mask;
+    uint32_t inverted_gpio_mask;
 } irig_h_sender_t;
 
 // Function declarations
@@ -213,6 +215,7 @@ void init_gpio_cache(irig_h_sender_t *sender) {
     sender->gpio_set_reg = gpio_map + GPSET0/4;
     sender->gpio_clr_reg = gpio_map + GPCLR0/4;
     sender->gpio_mask = 1 << sender->sending_gpio_pin;
+    sender->inverted_gpio_mask = 1 << sender->inverted_gpio_pin;
 }
 
 // Dynamic array functions
@@ -352,15 +355,18 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
     target_ns = start_ns + pulse_duration_ns;
     
     // Direct register write - fastest possible
+    // Set main pin HIGH and inverted pin LOW
     *(sender->gpio_set_reg) = sender->gpio_mask;
+    *(sender->gpio_clr_reg) = sender->inverted_gpio_mask;
     
     // Tight busy loop for precise timing
     do {
         clock_gettime(CLOCK_REALTIME, &current_time);
     } while (timespec_to_ns(&current_time) < target_ns && running);
     
-    // Direct register write to clear
+    // Direct register write to clear main pin and set inverted pin
     *(sender->gpio_clr_reg) = sender->gpio_mask;
+    *(sender->gpio_set_reg) = sender->inverted_gpio_mask;
 }
 
 // Pre-calculate next frame during 200ms window
@@ -454,10 +460,11 @@ void* continuous_irig_sending(void *arg) {
     return NULL;
 }
 
-irig_h_sender_t* create_irig_h_sender(int gpio_pin) {
+irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
     irig_h_sender_t *sender = malloc(sizeof(irig_h_sender_t));
     
     sender->sending_gpio_pin = gpio_pin;
+    sender->inverted_gpio_pin = inverted_gpio_pin;
     sender->running = false;
     
     sender->encoded_times.data = malloc(sizeof(double) * 100);
@@ -482,14 +489,16 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin) {
         return NULL;
     }
     
-    // Set GPIO pin as output
+    // Set GPIO pins as output
     gpio_set_output(sender->sending_gpio_pin);
+    gpio_set_output(sender->inverted_gpio_pin);
     
     // Initialize cached GPIO registers for ultra-fast access
     init_gpio_cache(sender);
     
-    // Ensure pin starts low
+    // Ensure main pin starts low and inverted pin starts high
     gpio_write(sender->sending_gpio_pin, 0);
+    gpio_write(sender->inverted_gpio_pin, 1);
     
     return sender;
 }
@@ -525,8 +534,9 @@ void finish_irig_sender(irig_h_sender_t *sender) {
     // Commented to disable file writing
     // write_timestamps_to_file(sender);
     
-    // Ensure GPIO is low
+    // Ensure main GPIO is low and inverted GPIO is high
     gpio_write(sender->sending_gpio_pin, 0);
+    gpio_write(sender->inverted_gpio_pin, 1);
     
     // Cleanup GPIO
     gpio_cleanup();
@@ -542,10 +552,10 @@ int main() {
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
     
-    printf("IRIG-H Timecode Sender starting on GPIO 6...\n");
+    printf("IRIG-H Timecode Sender starting on GPIO 17 (with inverted output on GPIO 27)...\n");
     printf("Using direct hardware register access\n");
     
-    irig_h_sender_t *sender = create_irig_h_sender(6);
+    irig_h_sender_t *sender = create_irig_h_sender(17, 27);
     if (!sender) {
         printf("Failed to initialize IRIG-H sender\n");
         return 1;
@@ -553,7 +563,7 @@ int main() {
     
     printf("IRIG-H sender initialized successfully\n");
     start_irig_sender(sender);
-    printf("IRIG-H transmission started on GPIO 6\n");
+    printf("IRIG-H transmission started on GPIO 17 (inverted on GPIO 27)\n");
     
     while (running) {
         sleep(1);
