@@ -6,27 +6,29 @@ import csv
 import irig_h_gpio as irig
 import threading
 
-irig_filename = max(glob.glob("data/irig_data_*.npz"), key=os.path.getmtime)
-pps_filename = max(glob.glob("data/pps_data_*.npz"), key=os.path.getmtime)
-
-error_filename = 'data/indexes_of_error.csv'
-decoded_filename = 'data/decoded_timecodes.csv'
-pulselength_filename = 'data/pulse_lengths.csv'
+irig_files = glob.glob("data/irig_data_*.npz")
+recent_file = max(irig_files, key=os.path.getmtime)
+input_files = []
+for irig_file in irig_files:
+    if abs(os.path.getmtime(recent_file) - os.path.getmtime(irig_file)) < 10:
+        input_files.append(irig_file)
+# pps_filename = max(glob.glob("data/pps_data_*.npz"), key=os.path.getmtime)
+print(input_files)
 
 def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> List[Tuple[int, int]]:
     return np.column_stack((falling_edges - rising_edges, rising_edges)).tolist()
 
-def find_sample_rate():
+def find_sample_rate(irig_filename:str):
     irig_starts = np.load(irig_filename)['starts']
     return round(np.diff(irig_starts).mean(), 0)
-    
-sample_rate = find_sample_rate()
-print(f'Sample rate: {sample_rate}')
 
-def error_analysis():
+def error_analysis(irig_filename:str, pps_filename:str):
+    sample_rate = find_sample_rate(irig_filename)
+    print(f'Sample rate: {sample_rate}')
+
     jumps = 0
 
-    irig_starts = np.load(irig_filename)['starts'] #TODO change thsi!!!!!
+    irig_starts = np.load(irig_filename)['starts']
     pps_starts = np.load(pps_filename)['ends']
 
     min_len = min(len(irig_starts), len(pps_starts))
@@ -55,15 +57,23 @@ def error_analysis():
     cumulative /= len(with_outliers)
     print(f'Average index delay with outliers: {cumulative}\nSeconds: {cumulative/sample_rate}')
 
+    output_filename = f'error_indexes_{irig_filename[15:-4]}.csv'
 
-    with open(error_filename, 'w', newline='') as file:
+    with open(output_filename, 'w', newline='') as file:
         csv_writer = csv.writer(file)
         csv_writer.writerow(result)
 
-def decode_analysis():
-    irig_file = np.load(irig_filename)
+def decode_analysis(irig_filename:str):
 
-    with open(decoded_filename, 'w', newline='') as file:
+    output_filename = f'decoded_timecodes_{irig_filename[15:-4]}.csv'
+
+    print(irig_filename)
+
+    irig_file = np.load(irig_filename)
+    for item in irig_file['ends']:
+        print(item)
+        
+    with open(output_filename, 'w', newline='') as file:
         pulse_lengths = to_pulse_lengths(irig_file['starts'], irig_file['ends'])
         irig_bits = irig.to_irig_bits(pulse_lengths)
         decoded = irig.decode_irig_bits(irig_bits)
@@ -71,7 +81,10 @@ def decode_analysis():
         csv_writer = csv.writer(file)
         csv_writer.writerows(decoded)
 
-error_thread = threading.Thread(target=error_analysis)
-decode_thread = threading.Thread(target=decode_analysis)
-error_thread.start()
-decode_thread.start()
+# error_thread = threading.Thread(target=error_analysis)
+# decode_thread = threading.Thread(target=decode_analysis)
+# error_thread.start()
+# decode_thread.start()
+
+for filename in input_files:
+    decode_analysis(filename)
