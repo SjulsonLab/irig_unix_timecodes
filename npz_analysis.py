@@ -5,6 +5,7 @@ import os
 import csv
 import irig_h_gpio as irig
 import threading
+import matplotlib as plt
 
 irig_files = glob.glob("data/irig_data_*.npz")
 recent_file = max(irig_files, key=os.path.getmtime)
@@ -20,7 +21,9 @@ def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> Lis
 
 def find_sample_rate(irig_filename:str):
     irig_starts = np.load(irig_filename)['starts']
-    return round(np.diff(irig_starts).mean(), 0)
+    diff = np.diff(irig_starts)
+    
+    return round(np.median(diff), 0)
 
 def error_analysis(irig_filename:str, pps_filename:str):
     sample_rate = find_sample_rate(irig_filename)
@@ -87,4 +90,5 @@ def decode_analysis(irig_filename:str):
 # decode_thread.start()
 
 for filename in input_files:
-    decode_analysis(filename)
+    print(find_sample_rate(filename))
+    # decode_analysis(filename)
