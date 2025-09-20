@@ -1,4 +1,4 @@
-from typing import Generator, List, Tuple, Literal
+from typing import Generator, List, Optional, Tuple, Literal
 import pigpio
 import time
 from datetime import datetime as dt
@@ -109,21 +109,39 @@ def to_irig_bits(pulse_info: List[Tuple[int, int]]) -> List[Tuple[IRIG_BIT, floa
     return irig_bits
 
 def decode_irig_bits(irig_bits: List[Tuple[IRIG_BIT, float]]) -> List[Tuple[float, float]]:
-    for i in range(120): # account for starting in the middle of the starting position marker. Find starting bit
-        if irig_bits[i][0] == 'P' and irig_bits[i+1][0] == 'P':
-            starting_index = i + 1
-            break
-    
-    if 'starting_index' not in locals():
-        raise ValueError("No starting position marker found.")
-    print(f'Decoding  starting index: {starting_index}\nSplicing list...')
-    
     spliced = []
-    for i in range(starting_index, len(irig_bits) - 60, 60):
-        spliced.append((irig_h_to_posix([t[0] for t in irig_bits[i:i+60]]), irig_bits[i][1]))
+
+    tracking_start = None
+
+    for i in range(120):
+        if irig_bits[i][0] == 'P' and irig_bits[i+1][0] == 'P':
+            tracking_start = i+1
+            break
+
+    if tracking_start == None:
+        raise ValueError('No starting position marker found.')
+
+    tracked_list = []
+
+    for i in range(tracking_start, len(irig_bits) - 1):
+        tracked_list.append(irig_bits[i])
+        if irig_bits[i][0] == 'P' and irig_bits[i+1][0] == 'P':
+            spliced.append(tracked_list)
+            tracked_list = []
+
+    # for i in range(starting_index, len(irig_bits) - 60, 60):
+    #     spliced.append((irig_h_to_posix([t[0] for t in irig_bits[i:i+60]]), irig_bits[i][1]))
+
+    # remove timecodes with bad lengths
+    spliced = [item for item in spliced if len(item) == 60]
+
+    decoded = [irig_h_to_posix([bit[0] for bit in splice]) for splice in spliced]
+
+    # Handle invalid timecodes
+    decoded = [item for item in decoded if item is not None]
     
-    print(f'List spliced! Splices: {len(spliced)}')
-    return spliced
+    print(f'List spliced! Splices: {len(decoded)}')
+    return decoded
 
 def decode_to_irig_h(binary_list: List[bool]) -> List[IRIG_BIT]:
     """
@@ -136,29 +154,37 @@ def decode_to_irig_h(binary_list: List[bool]) -> List[IRIG_BIT]:
 
     return [bit for bit in [identify_pulse_length(length) for length in find_pulse_length(binary_list)] if bit != None]
 
-def irig_h_to_datetime(irig_list: List[IRIG_BIT]) -> dt:
+def irig_h_to_datetime(irig_list: List[IRIG_BIT]) -> Optional[dt]:
     """
     Converts a list-represented IRIG-H frame into a Python datetime.
     Since IRIG does not encode century, this code assumes that the IRIG timecode is being sent in the same century as when this function is called.
+    Returns None
     """
 
     if len(irig_list) != 60:
         print("Length of irig timecode is not 60.")
-        return dt.min
+        return None
     seconds = bcd_decode(irig_list[1:5], SECONDS_WEIGHTS[0:4]) + bcd_decode(irig_list[6:9], SECONDS_WEIGHTS[4:7])
     minutes = bcd_decode(irig_list[10:14], MINUTES_WEIGHTS[0:4]) + bcd_decode(irig_list[15:18], MINUTES_WEIGHTS[4:7])
     hours = bcd_decode(irig_list[20:24], HOURS_WEIGHTS[0:4]) + bcd_decode(irig_list[25:27], HOURS_WEIGHTS[4:6])
     day_of_year = bcd_decode(irig_list[30:34], DAY_OF_YEAR_WEIGHTS[0:4]) + bcd_decode(irig_list[35:39], DAY_OF_YEAR_WEIGHTS[4:8]) + bcd_decode(irig_list[40:42], DAY_OF_YEAR_WEIGHTS[8:10])
     deciseconds = bcd_decode(irig_list[45:49], DECISECONDS_WEIGHTS)
     year = bcd_decode(irig_list[50:54], YEARS_WEIGHTS[0:4]) + bcd_decode(irig_list[55:59], YEARS_WEIGHTS[4:8]) + (dt.now().year // 100) * 100 # add in century
-    return dt.combine(datetime.date(year, 1, 1) + datetime.timedelta(days=(day_of_year - 1)), datetime.time(hours, minutes, seconds, deciseconds * 100_000))
+    try:
+        return dt.combine(datetime.date(year, 1, 1) + datetime.timedelta(days=(day_of_year - 1)), datetime.time(hours, minutes, seconds, deciseconds))
+    except ValueError:
+        return None
 
-def irig_h_to_posix(irig_list: List[IRIG_BIT]) -> float:
+def irig_h_to_posix(irig_list: List[IRIG_BIT]) -> Optional[float]:
     """
     Converts a list-represented IRIG-H frame into a POSIX timecode (Measured in seconds since 00:00:00 UTC, January 1st, 1970).
     Since IRIG does not encode century, this code assumes that the IRIG timecode is being sent in the same century as when this function is called.
     """
-    return irig_h_to_datetime(irig_list).timestamp()
+    as_dt = irig_h_to_datetime(irig_list)
+    if as_dt != None:
+        return as_dt.timestamp()
+    else:
+        return None
 
 def find_timecode_starts(binary_list) -> List[int]:
     """

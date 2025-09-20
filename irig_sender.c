@@ -317,22 +317,37 @@ uint64_t timespec_to_ns(const struct timespec *ts) {
     return (uint64_t)ts->tv_sec * NS_PER_SEC + (uint64_t)ts->tv_nsec;
 }
 
-// Ultra-precise wait until specific nanosecond timestamp - optimized for sub-100ns
+// Wait until 5ms before target, then poll with 100us sleeps for reduced CPU load
 void ultra_wait_until_ns(uint64_t target_ns) {
     struct timespec current_time;
     uint64_t current_ns;
     int64_t remaining_ns;
-    
-    // Tight loop - no nanosleep, pure busy wait for maximum precision
-    do {
+    struct timespec sleep_time;
+
+    // Sleep until 5ms before target
+    while (running) {
         clock_gettime(CLOCK_REALTIME, &current_time);
         current_ns = timespec_to_ns(&current_time);
         remaining_ns = (int64_t)(target_ns - current_ns);
-        
-        // Break immediately when target reached
+
+        // Break when target reached
         if (remaining_ns <= 0) break;
-        
-    } while (running);
+
+        // If more than 5ms remaining, sleep until 5ms before target
+        if (remaining_ns > 5000000) { // 5ms in nanoseconds
+            uint64_t sleep_until = target_ns - 5000000;
+            uint64_t sleep_duration = sleep_until - current_ns;
+
+            sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
+            sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
+            nanosleep(&sleep_time, NULL);
+        } else {
+            // Within 5ms of target - poll and sleep for 100us
+            sleep_time.tv_sec = 0;
+            sleep_time.tv_nsec = 100000; // 100 microseconds
+            nanosleep(&sleep_time, NULL);
+        }
+    }
 }
 
 double calculate_pulse_length(irig_bit_t bit) {
@@ -428,19 +443,16 @@ void* continuous_irig_sending(void *arg) {
             
             // Send all 60 bits with ultra-precise timing
             for (int i = 0; i < 60 && sender->running && running; i++) {
-                // Pre-position just before bit transmission
+                // Wait until bit start time with reduced CPU load
                 uint64_t bit_start_target = sender->bit_start_times[i];
-                uint64_t preposition_target = bit_start_target - 50; // 50ns early
-                
-                // Wait until 50ns before bit start
-                ultra_wait_until_ns(preposition_target);
-                
-                // Final precise wait to exact nanosecond
+
+                // Use the modified ultra_wait_until_ns that sleeps until 5ms before, then polls with 100us sleeps
+                ultra_wait_until_ns(bit_start_target);
+
+                // Get current time for printing
                 struct timespec current;
-                do {
-                    clock_gettime(CLOCK_REALTIME, &current);
-                } while (timespec_to_ns(&current) < bit_start_target && running);
-                
+                clock_gettime(CLOCK_REALTIME, &current);
+
                 // Print system time when bit is sent
                 printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
                 

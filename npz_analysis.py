@@ -20,7 +20,7 @@ def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> Lis
     return np.column_stack((falling_edges - rising_edges, rising_edges)).tolist()
 
 def find_sample_rate(irig_filename:str):
-    irig_starts = np.load(irig_filename)['starts']
+    irig_starts = np.load(irig_filename)['array1']
     diff = np.diff(irig_starts)
     
     return round(np.median(diff), 0)
@@ -31,17 +31,22 @@ def error_analysis(irig_filename:str, pps_filename:str):
 
     jumps = 0
 
-    irig_starts = np.load(irig_filename)['starts']
-    pps_starts = np.load(pps_filename)['ends']
+    irig_starts = np.load(irig_filename)['array1'].astype(np.int64)
+    pps_starts = np.load(pps_filename)['array2'].astype(np.int64)
 
     min_len = min(len(irig_starts), len(pps_starts))
-    irig_starts = irig_starts[:min_len].tolist()
-    pps_starts = pps_starts[:min_len].tolist()
+    irig_starts = irig_starts[:min_len]
+    pps_starts = pps_starts[:min_len]
+
+    # Calculate and correct for systematic timing offset
+    
+    irig_starts = irig_starts.tolist()
+    pps_starts = pps_starts.tolist()
 
     result = []
 
     for irig_start, pps_start in zip(irig_starts, pps_starts):
-        error = irig_start - pps_start
+        error = (irig_start - pps_start)
         while error < -sample_rate * (0.95 + jumps):
             jumps +=1
             result.append('JUMP')
@@ -84,11 +89,5 @@ def decode_analysis(irig_filename:str):
         csv_writer = csv.writer(file)
         csv_writer.writerows(decoded)
 
-# error_thread = threading.Thread(target=error_analysis)
-# decode_thread = threading.Thread(target=decode_analysis)
-# error_thread.start()
-# decode_thread.start()
-
-for filename in input_files:
-    print(find_sample_rate(filename))
-    # decode_analysis(filename)
+if __name__ == "__main__":
+    error_analysis(irig_filename='data/irig_data_000000.npz', pps_filename='data/pps_data_000000.npz')
