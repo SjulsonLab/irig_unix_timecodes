@@ -470,6 +470,13 @@ void* continuous_irig_sending(void *arg) {
                 // Use the modified ultra_wait_until_ns that sleeps until 5ms before, then polls with 100us sleeps
                 ultra_wait_until_ns(bit_start_target);
 
+                // Get current time for printing
+                struct timespec current;
+                clock_gettime(CLOCK_REALTIME, &current);
+
+                // Print system time when bit is sent
+                printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
+
                 // Send pulse with pre-calculated duration
                 uint64_t pulse_ns = (uint64_t)(sender->pulse_lengths[i] * NS_PER_SEC);
                 ultra_fast_pulse(sender, pulse_ns);
