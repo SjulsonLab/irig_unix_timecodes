@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# THIS ONLY DE-SETS UP THE IRIG SENDING SERVICE! Chrony config needs to be done seperately
+
 # Compile the program
 gcc -o irig_sender irig_sender.c -lpthread -lm
 

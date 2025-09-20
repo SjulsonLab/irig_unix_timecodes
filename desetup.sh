@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# THIS ONLY DE-SETS UP THE IRIG SENDING SERVICE! Chrony config needs to be done seperately
+
 # Stop the service
 sudo systemctl stop irig-sender.service
 
