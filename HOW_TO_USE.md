@@ -8,7 +8,7 @@ sudo chmod +x /usr/local/bin/irig_sender
 sudo mkdir -p /var/log/irig-sender
 
 # Save the service file
-sudo cp irig-sender.service /etc/systemd/system/
+sudo cp systemctl/irig-sender.service /etc/systemd/system/
 # (paste the content from above)
 
 # Reload systemd
