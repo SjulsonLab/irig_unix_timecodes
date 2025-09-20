@@ -374,10 +374,11 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
     *(sender->gpio_set_reg) = sender->gpio_mask;
     *(sender->gpio_clr_reg) = sender->inverted_gpio_mask;
     
-    // Tight busy loop for precise timing
-    do {
-        clock_gettime(CLOCK_REALTIME, &current_time);
-    } while (timespec_to_ns(&current_time) < target_ns && running);
+    // Use nanosleep for pulse duration instead of busy waiting
+    struct timespec sleep_duration;
+    sleep_duration.tv_sec = pulse_duration_ns / NS_PER_SEC;
+    sleep_duration.tv_nsec = pulse_duration_ns % NS_PER_SEC;
+    nanosleep(&sleep_duration, NULL);
     
     // Direct register write to clear main pin and set inverted pin
     *(sender->gpio_clr_reg) = sender->gpio_mask;
