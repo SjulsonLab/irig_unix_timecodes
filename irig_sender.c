@@ -361,24 +361,45 @@ double calculate_pulse_length(irig_bit_t bit) {
 
 // Ultra-fast GPIO pulse with pre-calculated timing
 void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
-    struct timespec start_time, current_time;
-    uint64_t start_ns, target_ns;
-    
+    struct timespec start_time, current_time, sleep_time;
+    uint64_t start_ns, target_ns, current_ns;
+    int64_t remaining_ns;
+
     // Single clock_gettime call at start
     clock_gettime(CLOCK_REALTIME, &start_time);
     start_ns = timespec_to_ns(&start_time);
     target_ns = start_ns + pulse_duration_ns;
-    
+
     // Direct register write - fastest possible
     // Set main pin HIGH and inverted pin LOW
     *(sender->gpio_set_reg) = sender->gpio_mask;
     *(sender->gpio_clr_reg) = sender->inverted_gpio_mask;
-    
-    // Tight busy loop for precise timing
+
+    // Sleep until close to target, then busy wait for precision
+    while (running) {
+        clock_gettime(CLOCK_REALTIME, &current_time);
+        current_ns = timespec_to_ns(&current_time);
+        remaining_ns = (int64_t)(target_ns - current_ns);
+
+        if (remaining_ns <= 0) break;
+
+        // If more than 10us remaining, sleep for most of it
+        if (remaining_ns > 10000) { // 10 microseconds
+            uint64_t sleep_duration = remaining_ns - 5000; // Leave 5us for busy wait
+            sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
+            sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
+            nanosleep(&sleep_time, NULL);
+        } else {
+            // Final precision timing with minimal busy wait
+            break;
+        }
+    }
+
+    // Final precision busy wait (only a few microseconds)
     do {
         clock_gettime(CLOCK_REALTIME, &current_time);
     } while (timespec_to_ns(&current_time) < target_ns && running);
-    
+
     // Direct register write to clear main pin and set inverted pin
     *(sender->gpio_clr_reg) = sender->gpio_mask;
     *(sender->gpio_set_reg) = sender->inverted_gpio_mask;
@@ -449,13 +470,6 @@ void* continuous_irig_sending(void *arg) {
                 // Use the modified ultra_wait_until_ns that sleeps until 5ms before, then polls with 100us sleeps
                 ultra_wait_until_ns(bit_start_target);
 
-                // Get current time for printing
-                struct timespec current;
-                clock_gettime(CLOCK_REALTIME, &current);
-
-                // Print system time when bit is sent
-                printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
-                
                 // Send pulse with pre-calculated duration
                 uint64_t pulse_ns = (uint64_t)(sender->pulse_lengths[i] * NS_PER_SEC);
                 ultra_fast_pulse(sender, pulse_ns);
@@ -465,7 +479,7 @@ void* continuous_irig_sending(void *arg) {
         }
         
         // Short sleep to prevent excessive CPU usage
-        usleep(1000); // 1ms
+        usleep(10000); // 10ms
     }
     
     printf("IRIG-H transmission thread stopping\n");
