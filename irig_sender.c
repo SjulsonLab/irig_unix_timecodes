@@ -55,6 +55,9 @@ typedef struct {
 // Constants
 #define SENDING_BIT_LENGTH 1.0
 #define MEASURED_DELAY 0.0
+// Offset to account for pin toggle latency (in nanoseconds)
+// This will be tuned based on oscilloscope measurements
+#define OFFSET_NS 10000  // 10 microseconds (adjust based on scope measurements)
 // Threshold for switching from sleep to busy wait (in nanoseconds)
 #define BUSY_WAIT_THRESHOLD_NS 1000000L  // 1 millisecond
 
@@ -396,25 +399,33 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
     }
 
     // Final precision busy wait (only a few microseconds)
+    // Inline calculation to avoid function call overhead
+    int nruns = 0; // debug counter
     do {
         clock_gettime(CLOCK_REALTIME, &current_time);
-    } while (timespec_to_ns(&current_time) < target_ns && running);
+        current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+        nruns++;
+    } while (current_ns < target_ns && running);
 
     // Direct register write to clear main pin and set inverted pin
     *(sender->gpio_clr_reg) = sender->gpio_mask;
     *(sender->gpio_set_reg) = sender->inverted_gpio_mask;
+
+    // Debug: print number of loop iterations
+    printf("Final busy wait ran %d iterations\n", nruns);
 }
 
 // Pre-calculate next frame during 200ms window
 void precalculate_next_frame(irig_h_sender_t *sender, time_t target_second) {
     struct tm *time_info = localtime(&target_second);
     generate_irig_h_frame(sender, time_info, sender->next_frame);
-    
+
     // Pre-calculate pulse lengths and timing
     uint64_t frame_start_ns = (uint64_t)target_second * NS_PER_SEC;
     for (int i = 0; i < 60; i++) {
         sender->pulse_lengths[i] = calculate_pulse_length(sender->next_frame[i]);
-        sender->bit_start_times[i] = frame_start_ns + (i * NS_PER_SEC);
+        // Apply offset to start pulse earlier and account for toggle latency
+        sender->bit_start_times[i] = frame_start_ns + (i * NS_PER_SEC) - OFFSET_NS;
     }
 }
 

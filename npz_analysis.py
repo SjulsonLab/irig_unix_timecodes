@@ -78,16 +78,17 @@ def decode_analysis(irig_filename:str):
     print(irig_filename)
 
     irig_file = np.load(irig_filename)
-    for item in irig_file['ends']:
+    for item in irig_file['array2']:
         print(item)
         
     with open(output_filename, 'w', newline='') as file:
-        pulse_lengths = to_pulse_lengths(irig_file['starts'], irig_file['ends'])
+        pulse_lengths = to_pulse_lengths(irig_file['array1'], irig_file['array2'])
         irig_bits = irig.to_irig_bits(pulse_lengths)
         decoded = irig.decode_irig_bits(irig_bits)
 
         csv_writer = csv.writer(file)
-        csv_writer.writerows(decoded)
+        csv_writer.writerows([[timestamp] for timestamp in decoded])
 
 if __name__ == "__main__":
-    error_analysis(irig_filename='data/irig_data_000000.npz', pps_filename='data/pps_data_000000.npz')
+    # error_analysis(irig_filename='data/irig_data_000000.npz', pps_filename='data/pps_data_000000.npz')
+    decode_analysis(irig_filename='data/irig_data_000000.npz')
