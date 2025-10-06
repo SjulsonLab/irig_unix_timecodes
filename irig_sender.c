@@ -60,7 +60,7 @@ typedef struct {
 // Busy wait buffer - sleep until this much time before target, then busy wait
 #define BUSY_WAIT_BUFFER_NS 1000000L  // 1 millisecond
 // Busy wait sleep interval - sleep between checks in busy wait (0 = pure busy wait, no sleep)
-#define BUSY_WAIT_SLEEP_NS 100000L  // 100 microseconds (set to 0 for maximum precision)
+#define BUSY_WAIT_SLEEP_NS 0L  // 100 microseconds (set to 0 for maximum precision)
 
 // Pre-calculated constants to avoid runtime computation
 static const uint64_t NS_PER_SEC = 1000000000ULL;
