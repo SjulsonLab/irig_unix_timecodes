@@ -59,6 +59,8 @@ typedef struct {
 #define OFFSET_NS 0  // 10 microseconds (adjust based on scope measurements)
 // Busy wait buffer - sleep until this much time before target, then busy wait
 #define BUSY_WAIT_BUFFER_NS 1000000L  // 1 millisecond
+// Busy wait sleep interval - sleep between checks in busy wait (0 = pure busy wait, no sleep)
+#define BUSY_WAIT_SLEEP_NS 100000L  // 100 microseconds (set to 0 for maximum precision)
 
 // Pre-calculated constants to avoid runtime computation
 static const uint64_t NS_PER_SEC = 1000000000ULL;
@@ -100,6 +102,7 @@ void ultra_wait_until_ns(uint64_t target_ns);
 
 // Signal handler for clean shutdown
 volatile sig_atomic_t running = 1;
+static int debug_mode = 0;  // Global debug flag
 
 void signal_handler(int sig) {
     printf("Received signal %d, shutting down gracefully...\n", sig);
@@ -346,11 +349,25 @@ void ultra_wait_until_ns(uint64_t target_ns) {
         }
     }
 
-    // Final busy wait
-    do {
-        clock_gettime(CLOCK_REALTIME, &current_time);
-        current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
-    } while (current_ns < target_ns && running);
+    // Final busy wait - choose implementation based on sleep setting
+    #if BUSY_WAIT_SLEEP_NS > 0
+        // Polled busy wait with sleep intervals
+        sleep_time.tv_sec = 0;
+        sleep_time.tv_nsec = BUSY_WAIT_SLEEP_NS;
+        do {
+            clock_gettime(CLOCK_REALTIME, &current_time);
+            current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+            if (current_ns < target_ns) {
+                nanosleep(&sleep_time, NULL);
+            }
+        } while (current_ns < target_ns && running);
+    #else
+        // Pure busy wait (no sleep, maximum precision, 100% CPU)
+        do {
+            clock_gettime(CLOCK_REALTIME, &current_time);
+            current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+        } while (current_ns < target_ns && running);
+    #endif
 }
 
 double calculate_pulse_length(irig_bit_t bit) {
@@ -398,25 +415,31 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
         }
     }
 
-    // Final precision busy wait (only a few microseconds)
-    // Inline calculation to avoid function call overhead
-    clock_gettime(CLOCK_REALTIME, &current_time);
-    current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
-    int64_t time_remaining = (int64_t)(target_ns - current_ns);
+    // Final precision busy wait
+    #if BUSY_WAIT_SLEEP_NS > 0
+        // Polled busy wait with sleep intervals
+        struct timespec poll_sleep;
+        poll_sleep.tv_sec = 0;
+        poll_sleep.tv_nsec = BUSY_WAIT_SLEEP_NS;
 
-    int nruns = 0; // debug counter
-    do {
-        clock_gettime(CLOCK_REALTIME, &current_time);
-        current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
-        nruns++;
-    } while (current_ns < target_ns && running);
+        do {
+            clock_gettime(CLOCK_REALTIME, &current_time);
+            current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+            if (current_ns < target_ns) {
+                nanosleep(&poll_sleep, NULL);
+            }
+        } while (current_ns < target_ns && running);
+    #else
+        // Pure busy wait (no sleep, maximum precision)
+        do {
+            clock_gettime(CLOCK_REALTIME, &current_time);
+            current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+        } while (current_ns < target_ns && running);
+    #endif
 
     // Direct register write to clear main pin and set inverted pin
     *(sender->gpio_clr_reg) = sender->gpio_mask;
     *(sender->gpio_set_reg) = sender->inverted_gpio_mask;
-
-    // Debug: print number of loop iterations and time remaining
-    printf("Final busy wait: %ld ns remaining, ran %d iterations\n", time_remaining, nruns);
 }
 
 // Pre-calculate next frame during 200ms window
@@ -485,12 +508,12 @@ void* continuous_irig_sending(void *arg) {
                 // Use ultra_wait_until_ns to sleep until BUSY_WAIT_BUFFER_NS before target, then busy wait
                 ultra_wait_until_ns(bit_start_target);
 
-                // Get current time for printing
-                struct timespec current;
-                clock_gettime(CLOCK_REALTIME, &current);
-
-                // Print system time when bit is sent
-                printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
+                // Debug: print system time when bit is sent
+                if (debug_mode) {
+                    struct timespec current;
+                    clock_gettime(CLOCK_REALTIME, &current);
+                    printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
+                }
 
                 // Send pulse with pre-calculated duration
                 uint64_t pulse_ns = (uint64_t)(sender->pulse_lengths[i] * NS_PER_SEC);
@@ -596,30 +619,36 @@ void finish_irig_sender(irig_h_sender_t *sender) {
 
 
 // Main function for continuous operation
-int main() {
+int main(int argc, char *argv[]) {
+    // Parse command line arguments
+    if (argc > 1 && strcmp(argv[1], "debug") == 0) {
+        debug_mode = 1;
+        printf("Debug mode enabled\n");
+    }
+
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
-    
+
     printf("IRIG-H Timecode Sender starting on GPIO 17 (with inverted output on GPIO 27)...\n");
     printf("Using direct hardware register access\n");
-    
+
     irig_h_sender_t *sender = create_irig_h_sender(17, 27);
     if (!sender) {
         printf("Failed to initialize IRIG-H sender\n");
         return 1;
     }
-    
+
     printf("IRIG-H sender initialized successfully\n");
     start_irig_sender(sender);
     printf("IRIG-H transmission started on GPIO 17 (inverted on GPIO 27)\n");
-    
+
     while (running) {
         sleep(1);
     }
-    
+
     printf("Stopping IRIG-H sender...\n");
     finish_irig_sender(sender);
     printf("IRIG-H sender stopped\n");
-    
+
     return 0;
 }

@@ -8,6 +8,7 @@ ExecStart=/usr/local/bin/irig_sender
 Restart=always
 RestartSec=10
 User=root
+Nice=-20
 StandardOutput=journal
 StandardError=journal
 
