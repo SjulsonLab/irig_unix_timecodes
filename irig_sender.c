@@ -56,7 +56,7 @@ typedef struct {
 #define SENDING_BIT_LENGTH 1.0
 // Offset to account for pin toggle latency (in nanoseconds)
 // This will be tuned based on oscilloscope measurements
-#define OFFSET_NS 0  // 10 microseconds (adjust based on scope measurements)
+#define OFFSET_NS 20000  // 10 microseconds (adjust based on scope measurements)
 // Busy wait buffer - sleep until this much time before target, then busy wait
 #define BUSY_WAIT_BUFFER_NS 1000000L  // 1 millisecond
 // Busy wait sleep interval - sleep between checks in busy wait (0 = pure busy wait, no sleep)
