@@ -54,17 +54,15 @@ typedef struct {
 
 // Constants
 #define SENDING_BIT_LENGTH 1.0
-#define MEASURED_DELAY 0.0
 // Offset to account for pin toggle latency (in nanoseconds)
 // This will be tuned based on oscilloscope measurements
-#define OFFSET_NS 10000  // 10 microseconds (adjust based on scope measurements)
-// Threshold for switching from sleep to busy wait (in nanoseconds)
-#define BUSY_WAIT_THRESHOLD_NS 1000000L  // 1 millisecond
+#define OFFSET_NS 0  // 10 microseconds (adjust based on scope measurements)
+// Busy wait buffer - sleep until this much time before target, then busy wait
+#define BUSY_WAIT_BUFFER_NS 1000000L  // 1 millisecond
 
 // Pre-calculated constants to avoid runtime computation
 static const uint64_t NS_PER_SEC = 1000000000ULL;
 static uint64_t bit_length_ns;
-static uint64_t measured_delay_ns;
 // Weight arrays
 static const int SECONDS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40};
 static const int MINUTES_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40};
@@ -312,7 +310,6 @@ void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info, irig_b
 // Initialize timing constants
 void init_timing_constants(void) {
     bit_length_ns = (uint64_t)(SENDING_BIT_LENGTH * NS_PER_SEC);
-    measured_delay_ns = (uint64_t)(MEASURED_DELAY * NS_PER_SEC);
 }
 
 // Convert timespec to nanoseconds
@@ -320,14 +317,14 @@ uint64_t timespec_to_ns(const struct timespec *ts) {
     return (uint64_t)ts->tv_sec * NS_PER_SEC + (uint64_t)ts->tv_nsec;
 }
 
-// Wait until 5ms before target, then poll with 100us sleeps for reduced CPU load
+// Wait until BUSY_WAIT_BUFFER_NS before target, then busy wait
 void ultra_wait_until_ns(uint64_t target_ns) {
     struct timespec current_time;
     uint64_t current_ns;
     int64_t remaining_ns;
     struct timespec sleep_time;
 
-    // Sleep until 5ms before target
+    // Sleep until BUSY_WAIT_BUFFER_NS before target
     while (running) {
         clock_gettime(CLOCK_REALTIME, &current_time);
         current_ns = timespec_to_ns(&current_time);
@@ -336,21 +333,24 @@ void ultra_wait_until_ns(uint64_t target_ns) {
         // Break when target reached
         if (remaining_ns <= 0) break;
 
-        // If more than 5ms remaining, sleep until 5ms before target
-        if (remaining_ns > 5000000) { // 5ms in nanoseconds
-            uint64_t sleep_until = target_ns - 5000000;
-            uint64_t sleep_duration = sleep_until - current_ns;
+        // If more than BUSY_WAIT_BUFFER_NS remaining, sleep
+        if (remaining_ns > BUSY_WAIT_BUFFER_NS) {
+            uint64_t sleep_duration = remaining_ns - BUSY_WAIT_BUFFER_NS;
 
             sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
             sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
             nanosleep(&sleep_time, NULL);
         } else {
-            // Within 5ms of target - poll and sleep for 100us
-            sleep_time.tv_sec = 0;
-            sleep_time.tv_nsec = 100000; // 100 microseconds
-            nanosleep(&sleep_time, NULL);
+            // Within buffer time - busy wait for precision
+            break;
         }
     }
+
+    // Final busy wait
+    do {
+        clock_gettime(CLOCK_REALTIME, &current_time);
+        current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+    } while (current_ns < target_ns && running);
 }
 
 double calculate_pulse_length(irig_bit_t bit) {
@@ -386,9 +386,9 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
         if (remaining_ns <= 0) break;
 
-        // If more than 1ms remaining, sleep for most of it
-        if (remaining_ns > 1000000) { // 1 millisecond
-            uint64_t sleep_duration = remaining_ns - 1000000; // Leave 1ms for busy wait
+        // If more than BUSY_WAIT_BUFFER_NS remaining, sleep for most of it
+        if (remaining_ns > BUSY_WAIT_BUFFER_NS) {
+            uint64_t sleep_duration = remaining_ns - BUSY_WAIT_BUFFER_NS;
             sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
             sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
             nanosleep(&sleep_time, NULL);
@@ -482,7 +482,7 @@ void* continuous_irig_sending(void *arg) {
                 // Wait until bit start time with reduced CPU load
                 uint64_t bit_start_target = sender->bit_start_times[i];
 
-                // Use the modified ultra_wait_until_ns that sleeps until 5ms before, then polls with 100us sleeps
+                // Use ultra_wait_until_ns to sleep until BUSY_WAIT_BUFFER_NS before target, then busy wait
                 ultra_wait_until_ns(bit_start_target);
 
                 // Get current time for printing
