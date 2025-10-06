@@ -386,14 +386,14 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
         if (remaining_ns <= 0) break;
 
-        // If more than 10us remaining, sleep for most of it
-        if (remaining_ns > 10000) { // 10 microseconds
-            uint64_t sleep_duration = remaining_ns - 5000; // Leave 5us for busy wait
+        // If more than 30us remaining, sleep for most of it
+        if (remaining_ns > 30000) { // 30 microseconds
+            uint64_t sleep_duration = remaining_ns - 20000; // Leave 20us for busy wait
             sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
             sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
             nanosleep(&sleep_time, NULL);
         } else {
-            // Final precision timing with minimal busy wait
+            // Final precision timing with busy wait
             break;
         }
     }
