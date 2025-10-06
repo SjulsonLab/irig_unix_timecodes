@@ -386,9 +386,9 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
         if (remaining_ns <= 0) break;
 
-        // If more than 30us remaining, sleep for most of it
-        if (remaining_ns > 30000) { // 30 microseconds
-            uint64_t sleep_duration = remaining_ns - 20000; // Leave 20us for busy wait
+        // If more than 1ms remaining, sleep for most of it
+        if (remaining_ns > 1000000) { // 1 millisecond
+            uint64_t sleep_duration = remaining_ns - 1000000; // Leave 1ms for busy wait
             sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
             sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
             nanosleep(&sleep_time, NULL);
@@ -400,6 +400,10 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
     // Final precision busy wait (only a few microseconds)
     // Inline calculation to avoid function call overhead
+    clock_gettime(CLOCK_REALTIME, &current_time);
+    current_ns = (uint64_t)current_time.tv_sec * NS_PER_SEC + (uint64_t)current_time.tv_nsec;
+    int64_t time_remaining = (int64_t)(target_ns - current_ns);
+
     int nruns = 0; // debug counter
     do {
         clock_gettime(CLOCK_REALTIME, &current_time);
@@ -411,8 +415,8 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
     *(sender->gpio_clr_reg) = sender->gpio_mask;
     *(sender->gpio_set_reg) = sender->inverted_gpio_mask;
 
-    // Debug: print number of loop iterations
-    printf("Final busy wait ran %d iterations\n", nruns);
+    // Debug: print number of loop iterations and time remaining
+    printf("Final busy wait: %ld ns remaining, ran %d iterations\n", time_remaining, nruns);
 }
 
 // Pre-calculate next frame during 200ms window
