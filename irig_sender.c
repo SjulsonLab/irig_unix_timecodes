@@ -244,7 +244,7 @@ void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info, irig_b
     bcd_encode(time_info->tm_sec + 1, SECONDS_WEIGHTS, 7, seconds_bcd);
     bcd_encode(time_info->tm_min, MINUTES_WEIGHTS, 7, minutes_bcd);
     bcd_encode(time_info->tm_hour, HOURS_WEIGHTS, 6, hours_bcd);
-    bcd_encode(time_info->tm_yday, DAY_OF_YEAR_WEIGHTS, 10, day_of_year_bcd);
+    bcd_encode(time_info->tm_yday + 1, DAY_OF_YEAR_WEIGHTS, 10, day_of_year_bcd);
     bcd_encode(0, DECISECONDS_WEIGHTS, 4, deciseconds_bcd);
     bcd_encode((time_info->tm_year + 1900) % 100, YEARS_WEIGHTS, 8, year_bcd);
 
