@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sched.h>
 #include <stdint.h>
 
 #define BCM2708_PERI_BASE_RPI1  0x20000000
@@ -417,6 +418,14 @@ void* continuous_irig_sending(void *arg) {
     if (!constants_initialized) {
         init_timing_constants();
         constants_initialized = 1;
+    }
+
+    struct sched_param param;
+    param.sched_priority = 80;
+    if (sched_setscheduler(0, SCHED_FIFO, &param) < 0) {
+        printf("Warning: Could not set SCHED_FIFO: %s (continuing with normal scheduling)\n", strerror(errno));
+    } else {
+        printf("Set SCHED_FIFO with priority 80\n");
     }
 
     printf("IRIG-H continuous transmission thread started\n");
