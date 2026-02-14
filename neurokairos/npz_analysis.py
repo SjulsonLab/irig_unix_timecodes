@@ -3,7 +3,7 @@ import numpy as np
 import glob
 import os
 import csv
-import irig_h_gpio as irig
+from . import irig_h_gpio as irig
 import threading
 import matplotlib as plt
 

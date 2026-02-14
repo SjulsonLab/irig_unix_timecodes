@@ -1,7 +1,7 @@
-import irig_decoding.irig_h_gpio as irig
+from neurokairos.irig_h_gpio import IrigHSender
 import time
 
-sender = irig.IrigHSender(sending_gpio_pin=6)
+sender = IrigHSender(sending_gpio_pin=6)
 
 try:
     sender.start()

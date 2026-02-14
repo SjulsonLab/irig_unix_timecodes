@@ -5,7 +5,7 @@ from datetime import datetime
 import gc
 import argparse
 from typing import List, Tuple, Optional
-from irig_h_gpio import identify_pulse_length, decode_irig_bits, irig_h_to_posix, to_irig_bits
+from .irig_h_gpio import identify_pulse_length, decode_irig_bits, irig_h_to_posix, to_irig_bits
 
 
 class IRIGExtractor:

@@ -2,7 +2,7 @@
 from typing import List, Literal, Generator
 import csv
 import os
-import irig_h_gpio as irig
+from . import irig_h_gpio as irig
 import numpy as np
 
 irig_file = "data/binary/irig_binary2.bin"
