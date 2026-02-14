@@ -39,8 +39,10 @@ The system uses a GPS receiver with Pulse Per Second (PPS) output to discipline 
 
 ### Signal Outputs
 
-- **GPIO 17**: IRIG-H timecode output (normal polarity)
-- **GPIO 27**: IRIG-H timecode output (inverted polarity)
+- **BCM GPIO 11** (default): IRIG-H timecode output (normal polarity)
+- Inverted output is disabled by default
+
+Both output pins are configurable via command-line flags (`-p` for normal, `-n` for inverted). Pin numbers use **BCM (Broadcom) GPIO numbering**, not physical board pin numbers. Either pin can be disabled by setting to `-1`.
 
 ## Key Components
 
@@ -56,7 +58,8 @@ Low-latency C program that generates IRIG-H timecodes via direct GPIO register a
 - 20 microsecond offset compensation for GPIO pin toggle latency
 - Pre-calculates frame timing 200ms before transmission to minimize jitter
 - Runs as systemd service with Nice -20 priority for scheduler preference
-- Outputs on GPIO 17 (normal) and GPIO 27 (inverted)
+- Configurable output pins via CLI flags (`-p` for normal, `-n` for inverted)
+- Default: BCM GPIO 11 (normal), inverted disabled
 
 **Timing precision features**:
 - Sleeps until ~1ms before second boundary
@@ -137,7 +140,7 @@ Reads SpikeGLX binary and metadata files:
   - u-blox NEO-M8T GNSS receiver chip with dedicated timing mode
   - Precision PPS output phase-locked to GPS atomic clocks
 - **GPS antenna** with direct sky visibility
-- **GPIO connections**: Pins 17 and 27 for IRIG output
+- **GPIO connections**: Default BCM GPIO 11 for IRIG output (configurable via `-p`/`-n` flags)
 
 ## Software Dependencies
 
@@ -202,13 +205,39 @@ sudo systemctl enable pigpiod
 sudo systemctl start pigpiod
 ```
 
+### 5. Configure Output Pins (Optional)
+
+The sender defaults to BCM GPIO 11 (normal output) with inverted output disabled. To customize:
+
+```bash
+# Run with specific pins
+./irig_sender -p 17 -n 27
+
+# Run with only inverted output
+./irig_sender -p -1 -n 22
+
+# Show all options
+./irig_sender -h
+```
+
+When running as a systemd service, edit the `ExecStart` line in the service file:
+
+```bash
+sudo systemctl edit irig-sender.service --force
+# Set: ExecStart=/usr/local/bin/irig_sender -p 17 -n 27
+sudo systemctl daemon-reload
+sudo systemctl restart irig-sender.service
+```
+
+**Note**: BCM GPIO pins 0, 1 (I2C EEPROM) and 14, 15 (UART/GPS serial) are blocked. BCM GPIO 4 (GPS PPS) triggers a warning but is allowed.
+
 ## Usage
 
 ### Generation Workflow
 
 1. **Clock Synchronization**: System clock is synchronized to GPS via chrony
 2. **Continuous Generation**: `irig_sender.c` runs as systemd service, continuously generating IRIG-H frames
-3. **Signal Output**: GPIO 17/27 output pulse-width modulated signals encoding UTC time
+3. **Signal Output**: Configured GPIO pin(s) output pulse-width modulated signals encoding UTC time
 4. **Data Recording**: Recording equipment samples GPIO signals alongside experimental data
 
 ### Decoding Workflow

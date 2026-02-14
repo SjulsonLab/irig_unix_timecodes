@@ -1,9 +1,11 @@
 [Unit]
-Description=IRIG-H Timecode Sender on GPIO 6
+Description=IRIG-H Timecode Sender
 After=multi-user.target
 
 [Service]
 Type=simple
+# Default pins: BCM GPIO 11 (normal), inverted disabled
+# To customize: ExecStart=/usr/local/bin/irig_sender -p 17 -n 27
 ExecStart=/usr/local/bin/irig_sender
 Restart=always
 RestartSec=10

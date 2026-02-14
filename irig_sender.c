@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <sched.h>
 #include <stdint.h>
+#include <getopt.h>
 
 #define BCM2708_PERI_BASE_RPI1  0x20000000
 #define BCM2708_PERI_BASE_RPI2  0x3F000000
@@ -193,14 +194,17 @@ void gpio_write(int pin, int value) {
     }
 }
 
-// Cache GPIO registers for fast access
+// Cache GPIO registers for fast access.
+// When a pin is -1 (disabled), its mask is set to 0. Writing mask=0 to
+// GPSET0/GPCLR0 is a hardware no-op on BCM GPIO, so no guards are needed
+// in the hot path (ultra_fast_pulse).
 void init_gpio_cache(irig_h_sender_t *sender) {
     if (gpio_map == NULL) return;
 
     sender->gpio_set_reg = gpio_map + GPSET0/4;
     sender->gpio_clr_reg = gpio_map + GPCLR0/4;
-    sender->gpio_mask = 1 << sender->sending_gpio_pin;
-    sender->inverted_gpio_mask = 1 << sender->inverted_gpio_pin;
+    sender->gpio_mask = (sender->sending_gpio_pin >= 0) ? (1 << sender->sending_gpio_pin) : 0;
+    sender->inverted_gpio_mask = (sender->inverted_gpio_pin >= 0) ? (1 << sender->inverted_gpio_pin) : 0;
 }
 
 double_array_t* create_double_array(size_t initial_capacity) {
@@ -505,13 +509,17 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
         return NULL;
     }
 
-    gpio_set_output(sender->sending_gpio_pin);
-    gpio_set_output(sender->inverted_gpio_pin);
+    // Only configure pins that are enabled (>= 0); -1 means disabled
+    if (sender->sending_gpio_pin >= 0) {
+        gpio_set_output(sender->sending_gpio_pin);
+        gpio_write(sender->sending_gpio_pin, 0);
+    }
+    if (sender->inverted_gpio_pin >= 0) {
+        gpio_set_output(sender->inverted_gpio_pin);
+        gpio_write(sender->inverted_gpio_pin, 1);
+    }
 
     init_gpio_cache(sender);
-
-    gpio_write(sender->sending_gpio_pin, 0);
-    gpio_write(sender->inverted_gpio_pin, 1);
 
     return sender;
 }
@@ -544,8 +552,11 @@ void finish_irig_sender(irig_h_sender_t *sender) {
     sender->running = false;
     pthread_join(sender->sender_thread, NULL);
 
-    gpio_write(sender->sending_gpio_pin, 0);
-    gpio_write(sender->inverted_gpio_pin, 1);
+    // Reset enabled pins to idle state before cleanup
+    if (sender->sending_gpio_pin >= 0)
+        gpio_write(sender->sending_gpio_pin, 0);
+    if (sender->inverted_gpio_pin >= 0)
+        gpio_write(sender->inverted_gpio_pin, 1);
 
     gpio_cleanup();
 
@@ -554,19 +565,105 @@ void finish_irig_sender(irig_h_sender_t *sender) {
     free(sender);
 }
 
+void print_usage(const char *prog_name) {
+    printf("Usage: %s [-p PIN] [-n PIN] [-d] [-h]\n", prog_name);
+    printf("  -p PIN   BCM GPIO pin for normal output (default: 11, -1 to disable)\n");
+    printf("  -n PIN   BCM GPIO pin for inverted output (default: -1, disabled)\n");
+    printf("  -d       Enable debug mode\n");
+    printf("  -h       Print this help message and exit\n");
+    printf("\nPin numbers use BCM (Broadcom) GPIO numbering, not physical board pin numbers.\n");
+}
+
+// Validate a BCM GPIO pin number. Returns 0 on success, -1 on error (message printed).
+int validate_gpio_pin(int pin, const char *label) {
+    if (pin == -1) return 0;  // disabled is always valid
+
+    if (pin < 0 || pin > 27) {
+        fprintf(stderr, "Error: %s pin %d is out of range. Valid BCM GPIO pins are 0-27 (or -1 to disable).\n", label, pin);
+        return -1;
+    }
+
+    // BCM 0, 1: reserved for I2C0 HAT EEPROM identification
+    if (pin == 0 || pin == 1) {
+        fprintf(stderr, "Error: BCM GPIO %d is reserved for I2C0 HAT EEPROM identification and cannot be used.\n", pin);
+        return -1;
+    }
+
+    // BCM 14, 15: reserved for UART serial (typically used by GPS receiver)
+    if (pin == 14 || pin == 15) {
+        fprintf(stderr, "Error: BCM GPIO %d is reserved for UART serial (typically used by GPS receiver) and cannot be used.\n", pin);
+        return -1;
+    }
+
+    // BCM 4: commonly used for GPS PPS input — warn but allow
+    if (pin == 4) {
+        printf("Warning: BCM GPIO 4 is commonly used for GPS PPS input; using it for IRIG output may conflict with clock disciplining.\n");
+    }
+
+    return 0;
+}
+
 int main(int argc, char *argv[]) {
-    if (argc > 1 && strcmp(argv[1], "debug") == 0) {
-        debug_mode = 1;
+    int normal_pin = 11;    // default: BCM GPIO 11
+    int inverted_pin = -1;  // default: disabled
+
+    // Parse command-line arguments with getopt
+    int opt;
+    while ((opt = getopt(argc, argv, "p:n:dh")) != -1) {
+        switch (opt) {
+            case 'p':
+                normal_pin = atoi(optarg);
+                break;
+            case 'n':
+                inverted_pin = atoi(optarg);
+                break;
+            case 'd':
+                debug_mode = 1;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                return 0;
+            default:
+                print_usage(argv[0]);
+                return 1;
+        }
+    }
+
+    if (debug_mode) {
         printf("Debug mode enabled\n");
+    }
+
+    // Validate pin numbers
+    if (validate_gpio_pin(normal_pin, "Normal") < 0) return 1;
+    if (validate_gpio_pin(inverted_pin, "Inverted") < 0) return 1;
+
+    // Both pins cannot be the same (unless both disabled)
+    if (normal_pin != -1 && normal_pin == inverted_pin) {
+        fprintf(stderr, "Error: Normal and inverted pins cannot be the same (both set to BCM GPIO %d).\n", normal_pin);
+        return 1;
+    }
+
+    // Warn if both pins are disabled
+    if (normal_pin == -1 && inverted_pin == -1) {
+        printf("Warning: Both output pins are disabled (-1). No GPIO output will be generated.\n");
     }
 
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 
-    printf("IRIG-H Timecode Sender starting on GPIO 17 (with inverted output on GPIO 27)...\n");
+    // Print startup info with actual pin configuration
+    printf("IRIG-H Timecode Sender starting...\n");
+    if (normal_pin >= 0)
+        printf("  Normal output:   BCM GPIO %d\n", normal_pin);
+    else
+        printf("  Normal output:   disabled\n");
+    if (inverted_pin >= 0)
+        printf("  Inverted output: BCM GPIO %d\n", inverted_pin);
+    else
+        printf("  Inverted output: disabled\n");
     printf("Using direct hardware register access\n");
 
-    irig_h_sender_t *sender = create_irig_h_sender(17, 27);
+    irig_h_sender_t *sender = create_irig_h_sender(normal_pin, inverted_pin);
     if (!sender) {
         printf("Failed to initialize IRIG-H sender\n");
         return 1;
@@ -574,7 +671,7 @@ int main(int argc, char *argv[]) {
 
     printf("IRIG-H sender initialized successfully\n");
     start_irig_sender(sender);
-    printf("IRIG-H transmission started on GPIO 17 (inverted on GPIO 27)\n");
+    printf("IRIG-H transmission started\n");
 
     while (running) {
         sleep(1);

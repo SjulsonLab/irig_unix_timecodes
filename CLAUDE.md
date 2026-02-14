@@ -20,6 +20,12 @@ gcc -o irig_sender irig_sender.c -lpthread -lm
 # Uninstall systemd service
 ./desetup.sh
 
+# Run with default pins (BCM GPIO 11, inverted disabled)
+./irig_sender
+
+# Run with custom pins
+./irig_sender -p 17 -n 27
+
 # Python dependencies
 pip install numpy pandas
 ```
@@ -39,7 +45,7 @@ python extract_from_dat.py recording.dat -o output.npz
 Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on any machine).
 
 ### Generation
-- `irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Outputs on GPIO 17 (normal) and GPIO 27 (inverted). Runs as systemd service at Nice -20.
+- `irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Runs as systemd service at Nice -20.
 - `irig_h_gpio.py:IrigHSender` — Python sender for testing only (uses pigpio daemon).
 
 ### Core Library
