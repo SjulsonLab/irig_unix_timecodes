@@ -8,23 +8,38 @@ NeuroKairos implements a GPS-disciplined IRIG-H timecode generation and decoding
 
 ## What is IRIG-H?
 
-IRIG-H is a timecode format from the Inter-Range Instrumentation Group (IRIG) standards, originally developed in the 1950s for military missile testing and aerospace telemetry. The format transmits timing information as pulse-width modulated signals:
+IRIG timecodes are a family of standardized timing formats from the Inter-Range Instrumentation Group (IRIG), originally developed in the 1950s for military missile testing and aerospace telemetry (defined in IRIG Standard 200). The formats differ in bit rate, frame rate, and carrier frequency:
 
-- **Frame structure**: 60 bits per frame, transmitted at 1 Hz (1 second per bit)
+| Format | Frame Rate | Bit Rate | Carrier Frequencies |
+|--------|-----------|----------|-------------------|
+| A | 10 frames/sec | 1,000 bits/sec | 10 kHz, 100 kHz, 1 MHz |
+| B | 1 frame/sec | 100 bits/sec | 1 kHz, 10 kHz, 100 kHz |
+| D | 1 frame/hour | 1 bit/min | 0.001 Hz |
+| E | 1 frame/10 sec | 10 bits/sec | 100 Hz, 1 kHz |
+| G | 100 frames/sec | 10,000 bits/sec | 100 kHz, 1 MHz |
+| **H** | **1 frame/min** | **1 bit/sec** | **1 Hz, 10 Hz, 100 Hz** |
+
+IRIG-B is the most commonly used format, followed by IRIG-A and IRIG-G. IRIG-H derivatives are used by NIST radio stations WWV, WWVH, and WWVB for time broadcast.
+
+### IRIG-H specifics
+
+IRIG-H transmits 1 bit per second with 60 bits per frame, so each frame takes exactly 1 minute and begins at the start of a minute. This means the **seconds** field (bits 1-8) and **deciseconds** field (bits 45-48) are always 0 — only **minutes, hours, day of year, and year** carry meaningful time information.
+
+Time is encoded in Binary Coded Decimal (BCD) format using pulse-width modulation:
+
 - **Pulse encoding**: Three pulse widths encode different values:
   - 0.2 seconds = binary 0
   - 0.5 seconds = binary 1
   - 0.8 seconds = position marker (P)
-- **Time encoding**: Binary Coded Decimal (BCD) format encoding seconds, minutes, hours, day of year, and year
 - **Position markers**: Located at bits 0, 9, 19, 29, 39, 49, 59 for frame synchronization
 
 Each frame encodes:
-- Seconds (bits 1-8)
 - Minutes (bits 10-17)
 - Hours (bits 20-26)
 - Day of year (bits 30-41)
 - Year, 2-digit (bits 50-58)
-- Deciseconds (bits 45-48, always 0 in this implementation)
+- Seconds (bits 1-8) — always 0
+- Deciseconds (bits 45-48) — always 0
 
 ## System Architecture
 
