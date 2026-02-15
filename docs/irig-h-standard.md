@@ -15,10 +15,6 @@ IRIG timecodes are a family of standardized timing formats from the Inter-Range 
 
 IRIG-B is the most commonly used format, followed by IRIG-A and IRIG-G. IRIG-H derivatives are used by NIST radio stations WWV, WWVH, and WWVB for time broadcast.
 
-![IRIG Timecode Frame Structure](time-code-irig.gif)
-
-*General IRIG timecode frame structure shown for IRIG-A (0.1s frame) and IRIG-B (1s frame). All IRIG formats share the same 100-bit frame layout with BCD time-of-year encoding, pulse-width modulated data bits, and position identifiers (P0-P9). IRIG-H uses the same structure at 1 bit/sec (60-second frame), with pulse widths of 0.2s (binary 0), 0.5s (binary 1), and 0.8s (position marker).*
-
 ## IRIG-H Specifics
 
 IRIG-H transmits 1 bit per second with 60 bits per frame, so each frame takes exactly 1 minute and begins at the start of a minute. This means the **seconds** field (bits 1-8) and **deciseconds** field (bits 45-48) are always 0 — only **minutes, hours, day of year, and year** carry meaningful time information.
