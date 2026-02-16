@@ -1,3 +1,26 @@
+"""
+Post-hoc analysis of IRIG and PPS pulse data stored in NPZ files.
+
+This module operates on NPZ files produced by extract_from_camera_events.py, which
+contain 'starts' (rising edges) and 'ends' (falling edges) arrays indexed by camera
+frame number. It provides tools for estimating sampling rate, measuring IRIG-vs-PPS
+timing error, and decoding IRIG frames from the NPZ data.
+
+Functions:
+    to_pulse_lengths()   -- Converts parallel rising/falling edge arrays into
+                            (duration, start_index) tuples for IRIG decoding.
+    find_sample_rate()   -- Estimates the sampling rate (frames per IRIG bit) by
+                            computing the median interval between consecutive pulse onsets.
+    error_analysis()     -- Compares IRIG and PPS pulse onset times to measure systematic
+                            timing offsets. Handles "jumps" where the IRIG-PPS difference
+                            wraps around a full bit period (indicating a missed/extra pulse).
+                            Reports average offset with and without outliers.
+    decode_analysis()    -- Converts NPZ pulse data to IRIG bits, finds 60-bit frames,
+                            decodes POSIX timestamps, and writes results to CSV.
+
+Script-level code at the bottom auto-discovers recent NPZ files and runs decode_analysis().
+"""
+
 from typing import List, Tuple
 import numpy as np
 import glob
@@ -17,15 +40,37 @@ for irig_file in irig_files:
 print(input_files)
 
 def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> List[Tuple[int, int]]:
+    """
+    Converts parallel arrays of rising and falling edge indices into
+    (pulse_duration, start_index) tuples for downstream IRIG pulse classification.
+    """
     return np.column_stack((falling_edges - rising_edges, rising_edges)).tolist()
 
 def find_sample_rate(irig_filename:str):
+    """
+    Estimates the sampling rate (samples per IRIG bit period) from an NPZ file.
+
+    Loads the rising edge array ('array1'), computes the median interval between
+    consecutive onsets, and rounds to the nearest integer. Since IRIG-H sends one
+    bit per second, this median interval equals the sampling rate in samples/sec.
+    """
     irig_starts = np.load(irig_filename)['array1']
     diff = np.diff(irig_starts)
-    
+
     return round(np.median(diff), 0)
 
 def error_analysis(irig_filename:str, pps_filename:str):
+    """
+    Measures the sample-level timing offset between IRIG and PPS pulse onsets.
+
+    For each pulse pair, computes (irig_onset - pps_onset). When this difference
+    wraps below -0.95 * sample_rate, a "JUMP" marker is inserted and subsequent
+    values are corrected by one full period. This handles cases where a PPS or
+    IRIG pulse was missed, causing the two streams to slip by one period.
+
+    Reports average offset both with and without outliers (values >= 15 samples),
+    and writes the full error series to a CSV file.
+    """
     sample_rate = find_sample_rate(irig_filename)
     print(f'Sample rate: {sample_rate}')
 
@@ -72,7 +117,13 @@ def error_analysis(irig_filename:str, pps_filename:str):
         csv_writer.writerow(result)
 
 def decode_analysis(irig_filename:str):
+    """
+    Decodes IRIG-H frames from an NPZ file and writes POSIX timestamps to CSV.
 
+    Loads rising and falling edge arrays, converts to pulse lengths, classifies
+    each pulse as an IRIG bit type, finds 60-bit frame boundaries, and decodes
+    each frame to a POSIX timestamp. One timestamp per row in the output CSV.
+    """
     output_filename = f'decoded_timecodes_{irig_filename[15:-4]}.csv'
 
     print(irig_filename)

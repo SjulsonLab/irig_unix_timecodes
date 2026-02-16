@@ -1,3 +1,28 @@
+"""
+Extracts IRIG-H pulse timing from camera event CSV files.
+
+Camera systems (e.g., Basler) can log GPIO pin transitions as timestamped events in
+CSV files. This script reads those CSVs looking for 'TimeP' (rising edge, pin 17) and
+'TimeN' (falling edge, pin 27) events, which correspond to the IRIG signal's HIGH and
+LOW transitions. It pairs rising/falling edges into pulses and saves the result as NPZ.
+
+This is a batch-processing script intended to be run directly. It globs for all
+matching camera event CSVs in the data/ directory and produces one NPZ per input file.
+
+Functions:
+    to_pulse_lengths() -- Converts parallel arrays of rising and falling edge frame
+                          indices into (duration, start_index) tuples for downstream
+                          IRIG decoding.
+
+Script-level workflow:
+    1. Glob for data/timestamps_events_absolute*.csv files.
+    2. For each CSV, parse column 3 (event description) line by line.
+    3. Track frame count (lines starting with 'frame') as the time axis.
+    4. Record frame indices where 'TimeP (pin 17)' and 'TimeN (pin 27)' appear.
+    5. Pair rising edges (starts) with falling edges (ends), truncating to equal length.
+    6. Save as data/irig_data_<timestamp>_<index>.npz with 'starts' and 'ends' arrays.
+"""
+
 import datetime
 import os
 from typing import List, Tuple
@@ -48,6 +73,10 @@ for t in irig_outputs:
     np.savez(f'data/{t[0]}', starts=starts, ends=ends)
 
     def to_pulse_lengths(rising_edges: np.ndarray, falling_edges: np.ndarray) -> List[Tuple[int, int]]:
+        """
+        Converts rising/falling edge arrays into (pulse_duration, start_index) tuples.
+        Duration is falling - rising (in frame counts); start_index is the rising edge.
+        """
         return np.column_stack((falling_edges - rising_edges, rising_edges)).tolist()
     
     pulses = to_pulse_lengths(np.array(starts, dtype=np.int64), np.array(ends, dtype=np.int64))

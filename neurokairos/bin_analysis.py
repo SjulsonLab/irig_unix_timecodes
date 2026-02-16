@@ -1,3 +1,36 @@
+"""
+Analysis tools for bit-packed binary IRIG and PPS recordings.
+
+This module works with bit-packed binary files where each byte contains 8 samples
+(one bit per sample). These files are typically produced by earlier extraction steps
+that threshold raw DAT recordings and pack the boolean results.
+
+Two main analysis modes are supported:
+
+    Error analysis (PPS vs IRIG timing offset):
+        Compares the IRIG signal against a PPS (pulse-per-second) reference signal
+        to measure how many samples the IRIG pulse onset lags behind the PPS rising
+        edge. This quantifies the systematic timing offset of the IRIG sender.
+
+    Decode analysis (IRIG frame decoding):
+        Unpacks the IRIG binary, classifies pulse widths, finds 60-bit frames, and
+        decodes each frame to a POSIX timestamp. Results are written to CSV.
+
+Functions:
+    byte_unpack_generator() -- Memory-efficient generator that reads a bit-packed binary
+                               file in chunks and yields individual boolean samples.
+    find_errors()           -- Iterates IRIG and PPS bit streams in lockstep, measuring
+                               the sample delay between each PPS rising edge and the
+                               corresponding IRIG pulse onset.
+    error_analysis()        -- High-level wrapper: unpacks both files, runs find_errors(),
+                               writes results to CSV.
+    decode_analysis()       -- High-level wrapper: unpacks IRIG file, decodes frames via
+                               irig_h_gpio, writes decoded timestamps to CSV.
+    get_pulse_lengths()     -- Extracts raw pulse lengths from the IRIG binary and writes
+                               them to CSV for manual inspection.
+
+Script-level code at the bottom runs error_analysis() on the default file paths.
+"""
 
 from typing import List, Literal, Generator
 import csv
@@ -50,7 +83,15 @@ def byte_unpack_generator(file_path: str, chunk_size: int = 1024*1024, total_sam
                 yield bool(bit)
                 samples_yielded += 1
 
-def find_errors(irig: Generator[bool, None, None], pps: Generator[bool, None, None]) -> List[int]: 
+def find_errors(irig: Generator[bool, None, None], pps: Generator[bool, None, None]) -> List[int]:
+    """
+    Measures the sample-level timing offset between PPS and IRIG pulse onsets.
+
+    Iterates both bit streams in lockstep. While PPS is HIGH and IRIG is LOW,
+    counts samples (the IRIG pulse hasn't started yet). When IRIG goes HIGH,
+    records the accumulated count as the delay for that pulse. The resulting
+    list contains one delay value per PPS pulse.
+    """
     errors_index_length = []
     tracking_length = 0
     processed_bits = 0
@@ -70,6 +111,12 @@ def find_errors(irig: Generator[bool, None, None], pps: Generator[bool, None, No
     return errors_index_length
 
 def error_analysis(irig_gen=None, pps_gen=None):
+    """
+    Runs PPS-vs-IRIG timing error analysis and writes results to CSV.
+
+    If generators are not provided, unpacks the default binary files.
+    Output is a single-row CSV where each value is the sample delay for one PPS pulse.
+    """
     if irig_gen is None:
         print('Unpacking irig bytes into bits.')
         irig_gen = byte_unpack_generator(irig_file)
@@ -92,6 +139,12 @@ def error_analysis(irig_gen=None, pps_gen=None):
     print('File writing done. Enjoy!')
 
 def decode_analysis(irig_gen=None):
+    """
+    Decodes IRIG-H frames from a bit-packed binary file and writes timestamps to CSV.
+
+    Unpacks the binary, classifies pulses into IRIG bits, finds 60-bit frame boundaries,
+    decodes each frame to a POSIX timestamp, and writes one timestamp per row to CSV.
+    """
     if irig_gen is None:
         print('Unpacking irig bytes into bits.')
         irig_gen = byte_unpack_generator(irig_file)
@@ -108,6 +161,12 @@ def decode_analysis(irig_gen=None):
     print('File writing done. Enjoy!')
 
 def get_pulse_lengths():
+    """
+    Extracts raw pulse lengths from the IRIG binary file and writes to CSV.
+
+    Each row in the output CSV contains (pulse_length_in_samples, start_sample_index).
+    Useful for inspecting pulse width distributions and diagnosing threshold issues.
+    """
     print('Unpacking irig bytes into bits.')
     irig_gen = byte_unpack_generator(irig_file)
 

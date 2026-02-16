@@ -1,3 +1,52 @@
+"""
+Core IRIG-H timecode encoding and decoding library.
+
+This module provides all the primitives needed to generate and interpret IRIG-H
+timecodes, a pulse-width modulated time encoding standard. IRIG-H transmits 60
+bits per frame at 1 Hz, encoding UTC time as BCD (Binary Coded Decimal) fields.
+Each bit is represented by the duration of a HIGH pulse within a 1-second window:
+
+    - 0.2s pulse = binary 0
+    - 0.5s pulse = binary 1
+    - 0.8s pulse = position marker (P)
+
+The 60-bit frame layout (see IRIG standard 200-16) places time fields at fixed
+bit positions separated by position markers (P0-P6):
+
+    [P0] seconds [P1] minutes [P2] hours [P3] day-of-year [P4] ... [P5] year [P6]
+
+BCD utilities:
+    bcd_encode()            -- Integer to BCD bit list using weighted positions.
+    bcd_decode()            -- BCD bit list back to integer via dot product with weights.
+
+Pulse-level decoding (for raw sampled binary signals):
+    find_pulse_length()     -- Generator that measures consecutive HIGH runs in a
+                               binary sample stream, yielding (length, start_index).
+    identify_pulse_length() -- Classifies a pulse length as 'P', True (1), False (0),
+                               or None (too short / noise).
+
+Frame-level decoding:
+    to_irig_bits()          -- Batch-converts pulse info list into classified IRIG bits.
+    decode_irig_bits()      -- Finds frame boundaries (consecutive P markers) and
+                               decodes complete 60-bit frames into POSIX timestamps.
+    decode_to_irig_h()      -- End-to-end: raw binary samples -> classified IRIG bit list.
+
+Timestamp conversion:
+    irig_h_to_datetime()    -- 60-bit IRIG frame -> Python datetime (assumes current century).
+    irig_h_to_posix()       -- 60-bit IRIG frame -> POSIX timestamp (float seconds since epoch).
+
+Binary stream segmentation (for bit-packed recordings):
+    find_timecode_starts()  -- Locates frame boundaries by counting signal transitions.
+    splice_binary_generator() -- Memory-efficient generator yielding per-frame binary segments.
+    splice_binary_list()    -- Eagerly splices a binary list into per-frame segments.
+    decode_full_measurement() -- Full pipeline: binary samples -> list of (posix_time, recording_time).
+
+IRIG-H sending (Python/pigpio, for testing only):
+    IrigHSender             -- Class that generates IRIG-H frames and transmits them
+                               as GPIO pulses via the pigpio daemon. The production sender
+                               is the C implementation in sender/irig_sender.c.
+"""
+
 from typing import Generator, List, Optional, Tuple, Literal
 # import pigpio
 import time
@@ -93,26 +142,52 @@ def find_pulse_length(binary_list: Generator[bool, None, None]) -> Generator[Tup
         yield (length, start_index)
 
 def identify_pulse_length(length):
+    """
+    Classifies a measured pulse length (in samples) into an IRIG-H bit type.
+
+    Returns 'P' for position marker, True for binary 1, False for binary 0,
+    or None if the pulse is too short (likely noise or a glitch).
+    """
     if length > P_THRESHOLD:
         return 'P'
     if length > ONE_THRESHOLD:
         return True
     if length > ZERO_THRESHOLD:
         return False
-    else: 
+    else:
         return None
 
 def to_irig_bits(pulse_info: List[Tuple[int, int]]) -> List[Tuple[IRIG_BIT, float]]:
+    """
+    Converts a list of raw pulse measurements into classified IRIG-H bits.
+
+    Takes pulse_info as a list of (pulse_length_in_samples, start_sample_index) tuples
+    (as produced by find_pulse_length()) and returns a list of (bit_type, time_in_seconds)
+    tuples, where bit_type is 'P', True, False, or None.
+    """
     print('Converting binary list into IRIG bits...')
     irig_bits = [(identify_pulse_length(pulse_length), starting_index * DECODE_BIT_PERIOD) for (pulse_length, starting_index) in pulse_info]
     print(f'Pulse count: {len(irig_bits)}')
     return irig_bits
 
 def decode_irig_bits(irig_bits: List[Tuple[IRIG_BIT, float]]) -> List[Tuple[float, float]]:
+    """
+    Finds complete 60-bit IRIG-H frames within a classified bit stream and decodes
+    each frame into a POSIX timestamp.
+
+    Frame boundaries are detected by finding two consecutive position markers ('P', 'P'),
+    which indicate the end of one frame and the start of the next (P6 followed by P0).
+    The first up-to-120 bits are scanned to find the initial frame boundary.
+
+    Returns a list of decoded POSIX timestamps (one per valid 60-bit frame).
+    Frames that don't decode to a valid time (e.g., corrupted bits) are silently dropped.
+    """
     spliced = []
 
     tracking_start = None
 
+    # Scan the first 120 bits to find the first pair of consecutive P markers,
+    # which marks the boundary between two frames (P6 of prev frame, P0 of next).
     for i in range(120):
         if irig_bits[i][0] == 'P' and irig_bits[i+1][0] == 'P':
             tracking_start = i+1
@@ -123,23 +198,21 @@ def decode_irig_bits(irig_bits: List[Tuple[IRIG_BIT, float]]) -> List[Tuple[floa
 
     tracked_list = []
 
+    # Accumulate bits into frames, splitting at each consecutive P-P boundary.
     for i in range(tracking_start, len(irig_bits) - 1):
         tracked_list.append(irig_bits[i])
         if irig_bits[i][0] == 'P' and irig_bits[i+1][0] == 'P':
             spliced.append(tracked_list)
             tracked_list = []
 
-    # for i in range(starting_index, len(irig_bits) - 60, 60):
-    #     spliced.append((irig_h_to_posix([t[0] for t in irig_bits[i:i+60]]), irig_bits[i][1]))
-
-    # remove timecodes with bad lengths
+    # Remove timecodes with bad lengths (valid IRIG-H frames are exactly 60 bits)
     spliced = [item for item in spliced if len(item) == 60]
 
     decoded = [irig_h_to_posix([bit[0] for bit in splice]) for splice in spliced]
 
-    # Handle invalid timecodes
+    # Drop frames that failed to decode (corrupted or invalid BCD values)
     decoded = [item for item in decoded if item is not None]
-    
+
     print(f'List spliced! Splices: {len(decoded)}')
     return decoded
 
@@ -268,6 +341,21 @@ def decode_full_measurement(binary_list) -> List[Tuple[float, float]]:
     return [((irig_h_to_posix(decode_to_irig_h(spliced[i][0])) - timecode_start_seconds), spliced[i][1] - timestamp_start_seconds) for i in range(len(spliced))]
     
 class IrigHSender:
+    """
+    Python IRIG-H sender for testing purposes (uses pigpio daemon for GPIO control).
+
+    Generates 60-bit IRIG-H frames encoding the current UTC time and transmits them
+    as pulse-width modulated signals on a Raspberry Pi GPIO pin. Each frame takes
+    60 seconds to send (1 bit/second at IRIG-H rate).
+
+    Timing uses a hybrid sleep/busy-wait approach (precise_wait_until) to hit
+    second boundaries accurately. A background thread runs the continuous sending
+    loop so the main thread remains responsive.
+
+    NOTE: This is the Python/pigpio implementation used for development and testing.
+    The production sender is the C implementation (sender/irig_sender.c) which uses
+    direct register access for better timing precision.
+    """
 
     base_path = 'irig_output'
     initialization_dt = str(dt.now().strftime("%Y-%m-%d_%H-%M-%S"))
@@ -394,6 +482,10 @@ class IrigHSender:
             
 
     def calculate_pulse_length(self, bit: IRIG_BIT) -> float:
+            """
+            Maps an IRIG-H bit type to the corresponding HIGH pulse duration in seconds.
+            Position marker (P) = 0.8s, binary 1 = 0.5s, binary 0 = 0.2s.
+            """
             if bit == 'P':
                 return 0.8 * SENDING_BIT_LENGTH
             elif bit == True:

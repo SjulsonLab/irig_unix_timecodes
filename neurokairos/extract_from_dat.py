@@ -1,3 +1,33 @@
+"""
+Main CLI tool for extracting and decoding IRIG-H timecodes from SpikeGLX DAT files.
+
+Reads raw binary DAT recordings in chunks, thresholds a single channel to detect
+IRIG TTL pulses, classifies each pulse by width (binary 0 / 1 / position marker),
+reassembles 60-bit frames, and decodes them to POSIX timestamps. Results are saved
+as compressed NPZ files.
+
+Classes:
+    IRIGExtractor -- End-to-end extraction pipeline. Constructed with file path and
+                     recording parameters, then call process() to run all steps:
+        extract_pulses_from_dat() -- Reads the DAT file in chunks, applies a threshold
+                                     to the IRIG channel, detects rising/falling edges,
+                                     and pairs them into complete pulses.
+        estimate_sampling_rate()  -- Estimates samples-per-second from median inter-pulse
+                                     onset intervals.
+        classify_and_decode()     -- Classifies each pulse duration as P/1/0/error using
+                                     identify_pulse_length(), then groups pulses into
+                                     60-bit frames and decodes POSIX timestamps.
+        detect_discontinuities()  -- Flags large gaps in pulse timing, unexpected jumps
+                                     in decoded timestamps, and dropped frames.
+        save_to_npz()             -- Writes the structured pulse array (on_sample,
+                                     off_sample, pulse_type, unix_time, frame_id) to
+                                     a compressed NPZ file.
+
+Functions:
+    main() -- argparse CLI entry point. Invoked via `neurokairos-extract` or
+              `python -m neurokairos.extract_from_dat`.
+"""
+
 import numpy as np
 import sys
 import os
