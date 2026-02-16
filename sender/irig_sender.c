@@ -497,7 +497,7 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
     sender->sending_starts.capacity = 100;
     
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
+    struct tm *tm_info = localtime(&now); // localtime is intentional here -- just for the output filename
     strftime(sender->timestamp_filename, sizeof(sender->timestamp_filename),
              "irig_output_timestamps_%Y-%m-%d_%H-%M-%S.csv", tm_info);
 
