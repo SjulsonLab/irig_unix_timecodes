@@ -402,7 +402,7 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
 // Pre-calculate timing for the next frame
 void precalculate_next_frame(irig_h_sender_t *sender, time_t target_second) {
-    struct tm *time_info = localtime(&target_second);
+    struct tm *time_info = gmtime(&target_second);
     generate_irig_h_frame(sender, time_info, sender->next_frame);
 
     uint64_t frame_start_ns = (uint64_t)target_second * NS_PER_SEC;
