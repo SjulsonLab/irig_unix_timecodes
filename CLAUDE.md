@@ -14,8 +14,14 @@ IRIG-H encodes UTC time as pulse-width modulated TTL signals: 60 bits/frame at 1
 # Compile the C sender (runs on Raspberry Pi, requires root for /dev/mem)
 cd sender && make
 
-# Install as systemd service
+# Install as systemd service (default pins)
 ./scripts/install.sh
+
+# Install with custom pins
+./scripts/install.sh -p 17 -n 27
+
+# Install with custom LED warning threshold
+./scripts/install.sh -p 17 -w 2.0
 
 # Uninstall systemd service
 ./scripts/uninstall.sh

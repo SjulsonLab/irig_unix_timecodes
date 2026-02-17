@@ -4,9 +4,9 @@ After=multi-user.target
 
 [Service]
 Type=simple
-# Default pins: BCM GPIO 11 (normal), inverted disabled
-# To customize: ExecStart=/usr/local/bin/irig_sender -p 17 -n 27
-ExecStart=/usr/local/bin/irig_sender
+# Pin configuration is set by install.sh (e.g., ./install.sh -p 17 -n 27).
+# The ExecStart line below is the default; install.sh substitutes it.
+ExecStart=/usr/local/bin/irig_sender -p 11 -n -1
 Restart=always
 RestartSec=10
 User=root

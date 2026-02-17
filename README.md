@@ -66,14 +66,26 @@ make
 ### 4. Install as System Service
 
 ```bash
+# Install with default pins (BCM GPIO 11, inverted disabled)
 ./scripts/install.sh
+
+# Install with custom pins
+./scripts/install.sh -p 17 -n 27
+
+# Install with custom LED warning threshold (ms)
+./scripts/install.sh -p 17 -w 2.0
+
+# See all install options
+./scripts/install.sh -h
 ```
+
+The install script compiles the sender, copies it to `/usr/local/bin/`, generates the systemd service file with your pin configuration baked in, and starts the service. To change pins later, just re-run `install.sh` with the new flags — it will restart the service automatically.
 
 The service runs with Nice -20 priority and SCHED_FIFO real-time scheduling for low-latency timing.
 
-### 5. Configure Output Pins (Optional)
+### 5. Pin Configuration (Optional)
 
-The sender defaults to BCM GPIO 11 (normal output) with inverted output disabled. To customize:
+The sender defaults to BCM GPIO 11 (normal output) with inverted output disabled. When running manually (not as a service):
 
 ```bash
 # Run with specific pins
@@ -84,15 +96,6 @@ The sender defaults to BCM GPIO 11 (normal output) with inverted output disabled
 
 # Show all options
 ./sender/irig_sender -h
-```
-
-When running as a systemd service, edit the `ExecStart` line in the service file:
-
-```bash
-sudo systemctl edit irig-sender.service --force
-# Set: ExecStart=/usr/local/bin/irig_sender -p 17 -n 27
-sudo systemctl daemon-reload
-sudo systemctl restart irig-sender.service
 ```
 
 **Note**: BCM GPIO pins 0, 1 (I2C EEPROM) and 14, 15 (UART/GPS serial) are blocked. BCM GPIO 4 (GPS PPS) triggers a warning but is allowed.
