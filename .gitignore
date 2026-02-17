@@ -1,8 +1,11 @@
 .DS_Store
 
 # Compiled C sender binary
-sender/irig_sender
-sender/irig_sender_mock
+raspberry_pi/sender/irig_sender
+raspberry_pi/sender/irig_sender_mock
+
+# Test-generated data
+temp/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -35,130 +35,107 @@ For detailed specifications including the complete bit map and encoding tables, 
 
 ## Installation
 
-### 1. Install Python Package
+### Python Decoder Library
+
+The `neurokairos` Python package decodes IRIG-H timecodes from recorded data. It runs on any machine — no Raspberry Pi required.
 
 ```bash
 pip install .
 
-# Or for development (editable install)
-pip install -e .
+# Or for development (editable install with test dependencies)
+pip install -e ".[test]"
 ```
 
-This installs the `neurokairos` package and the `neurokairos-extract` command-line tool.
+### Raspberry Pi Setup
 
-### 2. Configure GPS Clock Disciplining
+The following steps run on the Raspberry Pi that will generate IRIG-H signals.
 
-Install and configure chrony to use the GPS receiver as timing source:
+#### 1. Configure GPS Clock Disciplining
 
 ```bash
-sudo apt install chrony
+# Install chrony + gpsd with GPS PPS disciplining (stratum 1 server)
+sudo ./raspberry_pi/scripts/install_chrony_server.sh
+
+# Or install as NTP client only (no GPS)
+sudo ./raspberry_pi/scripts/install_chrony_client.sh --server <your-ntp-server>
 ```
 
-Edit `/etc/chrony/chrony.conf` to add GPS as stratum-0 source with appropriate refid and trust parameters.
-
-### 3. Compile C Sender
+#### 2. Compile C Sender
 
 ```bash
-cd sender
+cd raspberry_pi/sender
 make
 ```
 
-### 4. Install as System Service
+#### 3. Install as System Service
 
 ```bash
 # Install with default pins (BCM GPIO 11, inverted disabled)
-./scripts/install.sh
+./raspberry_pi/scripts/install.sh
 
 # Install with custom pins
-./scripts/install.sh -p 17 -n 27
+./raspberry_pi/scripts/install.sh -p 17 -n 27
 
 # Install with custom LED warning threshold (ms)
-./scripts/install.sh -p 17 -w 2.0
-
-# See all install options
-./scripts/install.sh -h
+./raspberry_pi/scripts/install.sh -p 17 -w 2.0
 ```
 
 The install script compiles the sender, copies it to `/usr/local/bin/`, generates the systemd service file with your pin configuration baked in, and starts the service. To change pins later, just re-run `install.sh` with the new flags — it will restart the service automatically.
 
 The service runs with Nice -20 priority and SCHED_FIFO real-time scheduling for low-latency timing.
 
-### 5. Pin Configuration (Optional)
-
-The sender defaults to BCM GPIO 11 (normal output) with inverted output disabled. When running manually (not as a service):
-
-```bash
-# Run with specific pins
-./sender/irig_sender -p 17 -n 27
-
-# Run with only inverted output
-./sender/irig_sender -p -1 -n 22
-
-# Show all options
-./sender/irig_sender -h
-```
-
-**Note**: BCM GPIO pins 0, 1 (I2C EEPROM) and 14, 15 (UART/GPS serial) are blocked. BCM GPIO 4 (GPS PPS) triggers a warning but is allowed.
-
 ## Usage
 
-### Generation Workflow
+### Generation (Raspberry Pi)
 
 1. **Clock synchronization**: System clock is synchronized to GPS via chrony
 2. **Continuous generation**: `irig_sender` runs as a systemd service, generating IRIG-H frames
 3. **Signal output**: GPIO pin(s) output pulse-width modulated signals encoding UTC time
 4. **Data recording**: Recording equipment samples GPIO signals alongside experimental data
 
-### Decoding Workflow
+### Decoding (Python)
 
-1. **Extract IRIG channel**: Use `neurokairos-extract` for electrophysiology or `extract_from_camera_events.py` for camera data
-2. **Pulse detection**: Pulses are detected, classified (0/1/P), and grouped into 60-bit frames
-3. **Frame decoding**: BCD fields are decoded to extract time components
-4. **Timestamp conversion**: Decoded frames are converted to POSIX timestamps
-5. **Analysis**: Use `npz_analysis.py` or `bin_analysis.py` to verify accuracy
+```python
+import neurokairos
 
-### Example: Extract from DAT File
+# Decode from a SpikeGLX recording
+clock_table = neurokairos.decode_sglx_irig("recording.bin")
 
-```bash
-neurokairos-extract recording.dat output.npz
+# Decode from an interleaved int16 .dat file
+clock_table = neurokairos.decode_dat_irig("recording.dat", sample_rate=30000)
+
+# Decode from video with IRIG LED
+clock_table = neurokairos.decode_video_irig("recording.mp4", roi=(x, y, w, h))
+
+# Decode from pre-extracted pulse intervals
+clock_table = neurokairos.decode_intervals_irig(intervals, start_time)
+
+# Convert sample indices to UTC timestamps
+utc_times = clock_table.source_to_reference(sample_indices)
 ```
 
-Optional parameters:
-- `--threshold`: Signal threshold for pulse detection
-- `--channel`: DAT file channel containing IRIG signal
-- `--sample-rate`: Override sampling rate (otherwise estimated)
+The returned `ClockTable` provides bidirectional interpolation between source samples and UTC time, with save/load to NPZ and JSON-serializable metadata.
 
-## Key Components
+## Python Package
 
-### IRIG Sender (C)
+### Modules
 
-**File**: `sender/irig_sender.c`
+| Module | Description |
+|--------|-------------|
+| `irig.py` | IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding, `build_clock_table` orchestrator |
+| `clock_table.py` | `ClockTable` dataclass: sparse time mapping with bidirectional interpolation, NPZ save/load |
+| `ttl.py` | Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths` |
+| `sglx.py` | SpikeGLX `.meta` reader + `decode_sglx_irig` entry point |
+| `video.py` | Video LED extraction + `decode_video_irig` entry point (requires OpenCV) |
 
-Low-latency C program generating IRIG-H timecodes via direct GPIO register access (`/dev/mem`). Uses a hybrid sleep/busy-wait approach: sleeps until ~1ms before the second boundary, then enters a busy-wait loop polling the system clock to detect the exact transition and immediately set GPIO HIGH. Runs as a systemd service with SCHED_FIFO real-time scheduling.
+### Public API
 
-### IRIG Decoder Library (Python)
-
-**File**: `neurokairos/irig_h_gpio.py`
-
-BCD encoding/decoding, pulse length classification, frame detection and synchronization, and POSIX timestamp conversion. Also includes a Python-based sender class (`IrigHSender`) using pigpio for testing.
-
-### Data Extraction Tools
-
-**`neurokairos/extract_from_dat.py`** — Extracts IRIG pulses from binary DAT files (electrophysiology recordings). Processes data in chunks, detects edges, classifies pulses, decodes frames, and outputs to compressed NPZ format.
-
-**`neurokairos/extract_from_camera_events.py`** — Extracts IRIG timecodes from camera event CSV files.
-
-### Analysis Scripts
-
-**`neurokairos/bin_analysis.py`** — Analyzes bit-packed binary IRIG data with generator-based unpacking and PPS error detection.
-
-**`neurokairos/npz_analysis.py`** — Analyzes NPZ output for sampling rate, IRIG-vs-PPS error/latency, and systematic offset detection.
-
-### SpikeGLX Integration
-
-**File**: `neurokairos/vendor/readSGLX.py`
-
-Vendored SpikeGLX binary/metadata reader supporting IMEC, NIDQ, and OBX data types with memory-mapped file access.
+- `ClockTable` — sparse time mapping (source <-> reference)
+- `bcd_encode`, `bcd_decode` — BCD encoding/decoding
+- `decode_dat_irig` — decode from interleaved int16 `.dat` files
+- `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
+- `decode_video_irig` — decode from video files with IRIG LED
+- `decode_intervals_irig` — decode from pre-extracted pulse intervals
 
 ## Performance
 
@@ -173,16 +150,6 @@ Validated against 30,000 Hz electrophysiology recording over 25 hours:
 | Pulse duration standard deviation | < 1 ms |
 | Decoding errors | 0 |
 
-## Data Formats
-
-### NPZ Output
-
-Structured NumPy arrays with fields: `on_sample` (uint64), `off_sample` (uint64), `pulse_type` (int8: 0/1/2 for zero/one/P, -1 for error), `unix_time` (float64), `frame_id` (int32).
-
-### CSV Output
-
-Decoded timestamps with columns: `frame_number`, `unix_timestamp`, `datetime`, `samples_since_last`.
-
 ## System Service Management
 
 ```bash
@@ -196,43 +163,44 @@ sudo journalctl -u irig-sender.service -f
 sudo systemctl stop irig-sender.service
 sudo systemctl start irig-sender.service
 
-# Restart after config changes
-sudo systemctl daemon-reload
-sudo systemctl restart irig-sender.service
+# Uninstall
+./raspberry_pi/scripts/uninstall.sh
 ```
 
 ## File Structure
 
 ```
-irig_unix_timecodes/
-├── sender/                              # C sender (Raspberry Pi hardware)
-│   ├── irig_sender.c
-│   └── Makefile
-├── neurokairos/                         # Python package
+neurokairos/
+├── raspberry_pi/                        # Raspberry Pi (generation)
+│   ├── sender/
+│   │   ├── irig_sender.c               # C sender with direct GPIO access
+│   │   └── Makefile
+│   ├── systemd/
+│   │   └── irig-sender.service          # systemd service template
+│   ├── scripts/
+│   │   ├── install.sh                   # Install sender as systemd service
+│   │   ├── uninstall.sh                 # Remove sender service
+│   │   ├── install_chrony_server.sh     # GPS + chrony setup (stratum 1)
+│   │   ├── install_chrony_client.sh     # chrony NTP client setup
+│   │   └── test_chrony.sh              # chrony/gpsd diagnostics
+│   └── docs/
+│       └── timing-loop.md              # C sender timing loop documentation
+├── neurokairos/                         # Python package (decoding)
 │   ├── __init__.py
-│   ├── irig_h_gpio.py                  # Core IRIG-H encoding/decoding library
-│   ├── extract_from_dat.py             # Main CLI tool
-│   ├── extract_from_camera_events.py   # Camera event extraction
-│   ├── bin_analysis.py                 # Binary data analysis
-│   ├── npz_analysis.py                 # NPZ data analysis
-│   └── vendor/
-│       ├── __init__.py
-│       └── readSGLX.py                 # Vendored SpikeGLX reader
+│   ├── irig.py
+│   ├── clock_table.py
+│   ├── ttl.py
+│   ├── sglx.py
+│   └── video.py
 ├── tests/
-│   └── test_irig_h.py
-├── systemd/
-│   └── irig-sender.service
-├── scripts/
-│   ├── install.sh
-│   └── uninstall.sh
 ├── docs/
+│   ├── irig-h-standard.md
 │   ├── system_architecture.jpg
-│   ├── irig_h_frame_structure.jpg
-│   └── irig-h-standard.md
+│   └── irig_h_frame_structure.jpg
 ├── pyproject.toml
-├── LICENSE
 ├── README.md
-└── CLAUDE.md
+├── CLAUDE.md
+└── LICENSE
 ```
 
 ## Citation

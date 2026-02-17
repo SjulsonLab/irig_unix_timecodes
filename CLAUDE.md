@@ -12,28 +12,28 @@ IRIG-H encodes UTC time as pulse-width modulated TTL signals: 60 bits/frame at 1
 
 ```bash
 # Compile the C sender (runs on Raspberry Pi, requires root for /dev/mem)
-cd sender && make
+cd raspberry_pi/sender && make
 
 # Install as systemd service (default pins)
-./scripts/install.sh
+./raspberry_pi/scripts/install.sh
 
 # Install with custom pins
-./scripts/install.sh -p 17 -n 27
+./raspberry_pi/scripts/install.sh -p 17 -n 27
 
 # Install with custom LED warning threshold
-./scripts/install.sh -p 17 -w 2.0
+./raspberry_pi/scripts/install.sh -p 17 -w 2.0
 
 # Uninstall systemd service
-./scripts/uninstall.sh
+./raspberry_pi/scripts/uninstall.sh
 
 # Run with default pins (BCM GPIO 11, inverted disabled)
-./sender/irig_sender
+./raspberry_pi/sender/irig_sender
 
 # Run with custom pins
-./sender/irig_sender -p 17 -n 27
+./raspberry_pi/sender/irig_sender -p 17 -n 27
 
 # Run with custom LED warning threshold (blink when root dispersion > 2ms)
-./sender/irig_sender -w 2.0
+./raspberry_pi/sender/irig_sender -w 2.0
 
 # Install Python package (editable/development mode)
 pip install -e ".[test]"
@@ -47,12 +47,12 @@ pytest tests/ -v
 Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on any machine).
 
 ### Generation (C sender)
-- `sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Polls chrony every ~60 seconds and encodes sync status (stratum, root dispersion) in unused IRIG-H frame bits 43-44 and 46-48. Controls the RPi ACT LED to indicate sync quality. Runs as systemd service at Nice -20.
+- `raspberry_pi/sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Polls chrony every ~60 seconds and encodes sync status (stratum, root dispersion) in unused IRIG-H frame bits 43-44 and 46-48. Controls the RPi ACT LED to indicate sync quality. Runs as systemd service at Nice -20.
 
 ### Chrony Integration
-- `scripts/install_chrony_server.sh` — Installs chrony + gpsd on the RPi with GPS. Configures PPS-disciplined stratum 1 NTP server.
-- `scripts/install_chrony_client.sh` — Installs chrony as NTP client (no GPS). Supports custom server (`--server`).
-- `scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
+- `raspberry_pi/scripts/install_chrony_server.sh` — Installs chrony + gpsd on the RPi with GPS. Configures PPS-disciplined stratum 1 NTP server.
+- `raspberry_pi/scripts/install_chrony_client.sh` — Installs chrony as NTP client (no GPS). Supports custom server (`--server`).
+- `raspberry_pi/scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
 
 ### Core Python Library (`neurokairos/`)
 - `ttl.py` — Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths`. NumPy only, no dependencies on other modules.
