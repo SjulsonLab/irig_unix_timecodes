@@ -1,6 +1,7 @@
 # NeuroKairos: GPS-based synchronization for neuroscience experiments
 
 A universal, open-source timing synchronization solution for neuroscience experiments. NeuroKairos continuously obtains the earth's Coordinated Universal Time (UTC) from the atomic clocks inside GPS satellites and encodes it a sequence of TTL pulses known as an IRIG-H timecode. Any instrument that can record this timecode through TTL pulses or a blinking LED can therefore continuously timestamp its simultaneously-recorded data with objective UTC time. This enables virtually any device to synchronize to UTC time, which provides a common reference for aligning different data streams with each other.
+
 ![NeuroKairos System Architecture](docs/system_architecture.jpg)
 
 *NeuroKairos system architecture: a GPS-disciplined Raspberry Pi serves as both a stratum-1 NTP server for network-connected devices and an IRIG-H timecode generator for direct hardware timing signals.*
