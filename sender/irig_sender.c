@@ -54,8 +54,10 @@ typedef struct {
 #define SENDING_BIT_LENGTH 1.0
 // Offset to account for pin toggle latency (tuned via oscilloscope)
 #define OFFSET_NS 20000
-// Sleep until this much time before target, then busy wait for precision
-#define BUSY_WAIT_BUFFER_NS 1000000L
+// Sleep until this much time before target, then busy wait for precision.
+// Must exceed worst-case nanosleep jitter (1-10ms on macOS/Linux without RT;
+// <0.5ms on Linux with SCHED_FIFO). 10ms gives safe margin everywhere.
+#define BUSY_WAIT_BUFFER_NS 10000000L
 // Sleep interval during busy wait (0 = pure busy wait for maximum precision)
 #define BUSY_WAIT_SLEEP_NS 0L
 
@@ -571,6 +573,11 @@ void ultra_wait_until_ns(uint64_t target_ns) {
     int64_t remaining_ns;
     struct timespec sleep_time;
 
+    // Cap individual nanosleep calls to limit overshoot variance.
+    // Long sleeps (seconds+) can have 10ms+ jitter on macOS/Linux;
+    // short sleeps (<100ms) typically overshoot by <5ms.
+    static const uint64_t MAX_SLEEP_NS = 100000000ULL;  // 100ms
+
     while (running) {
         clock_gettime(CLOCK_REALTIME, &current_time);
         current_ns = timespec_to_ns(&current_time);
@@ -580,6 +587,8 @@ void ultra_wait_until_ns(uint64_t target_ns) {
 
         if (remaining_ns > BUSY_WAIT_BUFFER_NS) {
             uint64_t sleep_duration = remaining_ns - BUSY_WAIT_BUFFER_NS;
+            if (sleep_duration > MAX_SLEEP_NS)
+                sleep_duration = MAX_SLEEP_NS;
 
             sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
             sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
@@ -628,6 +637,8 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
     *(sender->gpio_set_reg) = sender->gpio_mask;
     *(sender->gpio_clr_reg) = sender->inverted_gpio_mask;
 
+    static const uint64_t MAX_SLEEP_NS = 100000000ULL;  // 100ms
+
     while (running) {
         clock_gettime(CLOCK_REALTIME, &current_time);
         current_ns = timespec_to_ns(&current_time);
@@ -637,6 +648,8 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
         if (remaining_ns > BUSY_WAIT_BUFFER_NS) {
             uint64_t sleep_duration = remaining_ns - BUSY_WAIT_BUFFER_NS;
+            if (sleep_duration > MAX_SLEEP_NS)
+                sleep_duration = MAX_SLEEP_NS;
             sleep_time.tv_sec = sleep_duration / NS_PER_SEC;
             sleep_time.tv_nsec = sleep_duration % NS_PER_SEC;
             nanosleep(&sleep_time, NULL);
@@ -693,7 +706,6 @@ void precalculate_next_frame(irig_h_sender_t *sender, time_t target_second) {
 void* continuous_irig_sending(void *arg) {
     irig_h_sender_t *sender = (irig_h_sender_t*)arg;
     struct timespec current_time;
-    time_t current_second;
     time_t next_frame_time;
     int frames_sent = 0;
 
@@ -723,56 +735,52 @@ void* continuous_irig_sending(void *arg) {
     // always 0 and frames span :00 to :59.
     clock_gettime(CLOCK_REALTIME, &current_time);
     next_frame_time = ((current_time.tv_sec / 60) + 1) * 60;
-    current_second = next_frame_time - 1;
     precalculate_next_frame(sender, next_frame_time);
 
     printf("Waiting for next minute boundary (%ld seconds)...\n",
            (long)(next_frame_time - current_time.tv_sec));
 
     while (sender->running && running) {
-        clock_gettime(CLOCK_REALTIME, &current_time);
+        memcpy(sender->current_frame, sender->next_frame, sizeof(sender->current_frame));
 
-        if (current_time.tv_sec > current_second) {
-            current_second = current_time.tv_sec;
+        for (int i = 0; i < 60 && sender->running && running; i++) {
+            ultra_wait_until_ns(sender->bit_start_times[i]);
 
-            memcpy(sender->current_frame, sender->next_frame, sizeof(sender->current_frame));
+            if (!sender->running || !running) break;
 
-            double start_time_double = (double)current_second + (double)current_time.tv_nsec * 1e-9;
-            append_double(&sender->sending_starts, start_time_double);
-
-            for (int i = 0; i < 60 && sender->running && running; i++) {
-                uint64_t bit_start_target = sender->bit_start_times[i];
-                ultra_wait_until_ns(bit_start_target);
-
-                if (debug_mode) {
-                    struct timespec current;
-                    clock_gettime(CLOCK_REALTIME, &current);
-                    printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
-                }
-
-                uint64_t pulse_ns = (uint64_t)(sender->pulse_lengths[i] * NS_PER_SEC);
-                ultra_fast_pulse(sender, pulse_ns);
+            if (i == 0) {
+                // Record actual start time for diagnostics
+                struct timespec start_ts;
+                clock_gettime(CLOCK_REALTIME, &start_ts);
+                double start_time_double = (double)start_ts.tv_sec + (double)start_ts.tv_nsec * 1e-9;
+                append_double(&sender->sending_starts, start_time_double);
             }
 
-            // Check frame limit
-            frames_sent++;
-            if (max_frames > 0 && frames_sent >= max_frames) {
-                printf("Completed %d frame(s), exiting.\n", frames_sent);
-                running = 0;
-                break;
+            if (debug_mode) {
+                struct timespec current;
+                clock_gettime(CLOCK_REALTIME, &current);
+                printf("Bit %d sent at system time: %ld.%09ld\n", i, current.tv_sec, current.tv_nsec);
             }
 
-            // Poll chrony after each full 60-bit frame (~every 60 seconds)
-            poll_chrony_status(sender);
-            update_led_status(sender);
-
-            // Prepare next frame at next minute boundary
-            next_frame_time += 60;
-            precalculate_next_frame(sender, next_frame_time);
-            current_second = next_frame_time - 1;
+            uint64_t pulse_ns = (uint64_t)(sender->pulse_lengths[i] * NS_PER_SEC);
+            ultra_fast_pulse(sender, pulse_ns);
         }
 
-        usleep(10000);
+        // Check frame limit
+        frames_sent++;
+        if (max_frames > 0 && frames_sent >= max_frames) {
+            printf("Completed %d frame(s), exiting.\n", frames_sent);
+            running = 0;
+            break;
+        }
+
+        // Poll chrony after each full 60-bit frame (~every 60 seconds)
+        poll_chrony_status(sender);
+        update_led_status(sender);
+
+        // Prepare next frame at next minute boundary
+        next_frame_time += 60;
+        precalculate_next_frame(sender, next_frame_time);
     }
 
 #ifdef MOCK_GPIO
