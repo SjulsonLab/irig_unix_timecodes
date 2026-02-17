@@ -35,6 +35,10 @@ Timestamp conversion:
     irig_h_to_datetime()    -- 60-bit IRIG frame -> Python datetime (assumes current century).
     irig_h_to_posix()       -- 60-bit IRIG frame -> POSIX timestamp (float seconds since epoch).
 
+Sync status extraction (NeuroKairos extension):
+    extract_sync_status()   -- 60-bit IRIG frame -> dict with chrony stratum and
+                               root dispersion bucket decoded from bits 43-44, 46-48.
+
 Binary stream segmentation (for bit-packed recordings):
     find_timecode_starts()  -- Locates frame boundaries by counting signal transitions.
     splice_binary_generator() -- Memory-efficient generator yielding per-frame binary segments.
@@ -79,6 +83,13 @@ HOURS_WEIGHTS = [1, 2, 4, 8, 10, 20]
 DAY_OF_YEAR_WEIGHTS = [1, 2, 4, 8, 10, 20, 40, 80, 100, 200]
 DECISECONDS_WEIGHTS = [1, 2, 4, 8]
 YEARS_WEIGHTS = [1, 2, 4, 8, 10, 20, 40, 80]
+
+# NeuroKairos sync status extension: chrony sync quality encoded in unused bits.
+# Bits 43-44 encode stratum, bits 46-48 encode root dispersion bucket.
+# See docs/irig-h-standard.md for the full encoding specification.
+STRATUM_BITS = (43, 44)
+ROOT_DISPERSION_BITS = (46, 47, 48)
+ROOT_DISPERSION_THRESHOLDS_MS = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0]  # bucket boundaries
 
 # ------------------------- BCD UTILITIES ------------------------- #
 # These are used for encoding and decoding IRIG-H timecodes.
@@ -241,7 +252,10 @@ def irig_h_to_datetime(irig_list: List[IRIG_BIT]) -> Optional[dt]:
     minutes = bcd_decode(irig_list[10:14], MINUTES_WEIGHTS[0:4]) + bcd_decode(irig_list[15:18], MINUTES_WEIGHTS[4:7])
     hours = bcd_decode(irig_list[20:24], HOURS_WEIGHTS[0:4]) + bcd_decode(irig_list[25:27], HOURS_WEIGHTS[4:6])
     day_of_year = bcd_decode(irig_list[30:34], DAY_OF_YEAR_WEIGHTS[0:4]) + bcd_decode(irig_list[35:39], DAY_OF_YEAR_WEIGHTS[4:8]) + bcd_decode(irig_list[40:42], DAY_OF_YEAR_WEIGHTS[8:10])
-    deciseconds = bcd_decode(irig_list[45:49], DECISECONDS_WEIGHTS)
+    # Bits 45-48 were originally deciseconds but are always 0 in IRIG-H (1 bit/sec rate).
+    # Bits 46-48 are now repurposed for NeuroKairos sync status (root dispersion).
+    # Hardcode to 0 rather than decoding, since these bits no longer carry time data.
+    deciseconds = 0
     year = bcd_decode(irig_list[50:54], YEARS_WEIGHTS[0:4]) + bcd_decode(irig_list[55:59], YEARS_WEIGHTS[4:8]) + (dt.now().year // 100) * 100 # add in century
     try:
         return dt.combine(datetime.date(year, 1, 1) + datetime.timedelta(days=(day_of_year - 1)), datetime.time(hours, minutes, seconds, deciseconds))
@@ -258,6 +272,43 @@ def irig_h_to_posix(irig_list: List[IRIG_BIT]) -> Optional[float]:
         return as_dt.timestamp()
     else:
         return None
+
+def extract_sync_status(irig_list: List[IRIG_BIT]) -> dict:
+    """
+    Extracts the NeuroKairos chrony sync status from an IRIG-H frame.
+
+    Reads bits 43-44 (stratum, 2 bits) and bits 46-48 (root dispersion bucket,
+    3 bits) from the frame. These bits are a NeuroKairos extension to the IRIG-H
+    standard that encode chrony synchronization quality.
+
+    Note on backward compatibility: old recordings (before this extension) have
+    all-zero status bits, which maps to stratum=1 and root_dispersion_bucket=0
+    (<0.25 ms). This is ambiguous with a genuinely excellent GPS-locked source
+    and is accepted as a known limitation.
+
+    Args:
+        irig_list: A 60-element list of IRIG-H bits ('P', True, or False).
+
+    Returns:
+        A dict with:
+            'stratum': int (1, 2, 3, or 4 where 4 means 4+ or not synchronized)
+            'root_dispersion_bucket': int (0-7, index into ROOT_DISPERSION_THRESHOLDS_MS)
+    """
+    if len(irig_list) != 60:
+        return {'stratum': -1, 'root_dispersion_bucket': -1}
+
+    # Decode 2-bit stratum: bit 43 = LSB, bit 44 = MSB
+    stratum_enc = (1 if irig_list[43] is True else 0) | \
+                  ((1 if irig_list[44] is True else 0) << 1)
+    # Map encoded value back to stratum: 0->1, 1->2, 2->3, 3->4
+    stratum = stratum_enc + 1
+
+    # Decode 3-bit root dispersion bucket: bit 46 = LSB, 47, 48 = MSB
+    disp_enc = (1 if irig_list[46] is True else 0) | \
+               ((1 if irig_list[47] is True else 0) << 1) | \
+               ((1 if irig_list[48] is True else 0) << 2)
+
+    return {'stratum': stratum, 'root_dispersion_bucket': disp_enc}
 
 def find_timecode_starts(binary_list) -> List[int]:
     """
@@ -447,11 +498,15 @@ class IrigHSender:
         # Bits 40-41: Day of year (Hundreds) - Weights: 100, 200
         irig_h_list.extend(day_of_year_bcd[8:10])
 
-        # Bits 42-44: Unused (0)
-        irig_h_list.extend([0,0,0])
+        # Bit 42: Reserved (0)
+        irig_h_list.append(0)
+        # Bits 43-44: Sync status stratum (NeuroKairos extension, 0 = stratum 1 in production C sender)
+        irig_h_list.extend([0, 0])
 
-        # Bits 45-48: Deciseconds - Weights: 1, 2, 4, 8
-        irig_h_list.extend(deciseconds_bcd[0:4])
+        # Bit 45: Reserved (0)
+        irig_h_list.append(0)
+        # Bits 46-48: Sync status root dispersion (NeuroKairos extension, 0 = <0.25ms in production C sender)
+        irig_h_list.extend([0, 0, 0])
 
         # Bit 49: P5 (Position identifier)
         irig_h_list.append('P')

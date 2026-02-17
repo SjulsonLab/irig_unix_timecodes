@@ -20,8 +20,9 @@ Classes:
         detect_discontinuities()  -- Flags large gaps in pulse timing, unexpected jumps
                                      in decoded timestamps, and dropped frames.
         save_to_npz()             -- Writes the structured pulse array (on_sample,
-                                     off_sample, pulse_type, unix_time, frame_id) to
-                                     a compressed NPZ file.
+                                     off_sample, pulse_type, unix_time, frame_id,
+                                     stratum, root_dispersion_bucket) to a compressed
+                                     NPZ file.
 
 Functions:
     main() -- argparse CLI entry point. Invoked via `neurokairos-extract` or
@@ -35,7 +36,7 @@ from datetime import datetime
 import gc
 import argparse
 from typing import List, Tuple, Optional
-from .irig_h_gpio import identify_pulse_length, decode_irig_bits, irig_h_to_posix, to_irig_bits
+from .irig_h_gpio import identify_pulse_length, decode_irig_bits, irig_h_to_posix, to_irig_bits, extract_sync_status
 
 
 class IRIGExtractor:
@@ -252,16 +253,20 @@ class IRIGExtractor:
             ('off_sample', np.uint64),
             ('pulse_type', np.int8),
             ('unix_time', np.float64),
-            ('frame_id', np.int32)
+            ('frame_id', np.int32),
+            ('stratum', np.int8),
+            ('root_dispersion_bucket', np.int8)
         ])
 
         # Copy existing data
         classified_pulses['on_sample'] = self.pulses['on_sample']
         classified_pulses['off_sample'] = self.pulses['off_sample']
 
-        # Initialize unix_time as NaN and frame_id as -1
+        # Initialize unix_time as NaN, frame_id as -1, sync fields as -1 (unknown)
         classified_pulses['unix_time'] = np.nan
         classified_pulses['frame_id'] = -1
+        classified_pulses['stratum'] = -1
+        classified_pulses['root_dispersion_bucket'] = -1
 
         # Calculate pulse durations
         durations = self.pulses['off_sample'] - self.pulses['on_sample']
@@ -354,6 +359,10 @@ class IRIGExtractor:
             if current_pos + 60 > len(irig_bits):
                 break
 
+            # Build the bit list for this frame to extract sync status
+            frame_bit_list = [irig_bits[current_pos + j][0] for j in range(60)]
+            sync_status = extract_sync_status(frame_bit_list)
+
             # Mark pulses in this frame
             for offset in range(60):
                 irig_idx = current_pos + offset
@@ -361,6 +370,8 @@ class IRIGExtractor:
                     pulse_idx = irig_to_pulse_idx[irig_idx]
                     pulses['frame_id'][pulse_idx] = frame_id
                     pulses['unix_time'][pulse_idx] = frame_time + offset
+                    pulses['stratum'][pulse_idx] = sync_status['stratum']
+                    pulses['root_dispersion_bucket'][pulse_idx] = sync_status['root_dispersion_bucket']
 
             frame_id += 1
 

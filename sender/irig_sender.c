@@ -85,6 +85,13 @@ typedef struct {
     volatile unsigned *gpio_clr_reg;
     uint32_t gpio_mask;
     uint32_t inverted_gpio_mask;
+
+    // Chrony sync status (polled every ~60 seconds)
+    int chrony_stratum;            // 0 = not synced, 1-15 = NTP stratum
+    double chrony_root_dispersion; // in seconds
+    bool chrony_synced;            // true if leap status != "Not synchronised"
+    double warn_threshold_ms;      // LED warning threshold (default 1.0)
+    char led_original_trigger[64]; // saved LED trigger for cleanup
 } irig_h_sender_t;
 
 void init_timing_constants(void);
@@ -240,6 +247,176 @@ void bcd_encode(int value, const int *weights, int weight_count, int *result) {
     }
 }
 
+// --- Chrony status polling --- //
+
+// Encode stratum into 2-bit field: 1->0, 2->1, 3->2, >=4 or 0->3
+int encode_stratum(int stratum) {
+    if (stratum == 1) return 0;
+    if (stratum == 2) return 1;
+    if (stratum == 3) return 2;
+    return 3;  // stratum 4+ or not synchronized (0)
+}
+
+// Encode root dispersion (in seconds) into 3-bit bucket (0-7).
+// Bucket boundaries double: 0.25, 0.5, 1, 2, 4, 8, 16 ms
+int encode_root_dispersion(double dispersion_sec) {
+    double dispersion_ms = dispersion_sec * 1000.0;
+    if (dispersion_ms < 0.25)  return 0;
+    if (dispersion_ms < 0.5)   return 1;
+    if (dispersion_ms < 1.0)   return 2;
+    if (dispersion_ms < 2.0)   return 3;
+    if (dispersion_ms < 4.0)   return 4;
+    if (dispersion_ms < 8.0)   return 5;
+    if (dispersion_ms < 16.0)  return 6;
+    return 7;  // >= 16 ms or not synchronized
+}
+
+// Poll chrony for current sync status via `chronyc -c tracking`.
+// CSV fields (0-indexed): 3=stratum, 12=root dispersion, 14=leap status
+// On any failure (chronyc missing, chrony not running), sets safe defaults.
+void poll_chrony_status(irig_h_sender_t *sender) {
+    FILE *fp = popen("chronyc -c tracking 2>/dev/null", "r");
+    if (!fp) {
+        sender->chrony_stratum = 0;
+        sender->chrony_root_dispersion = 1.0;  // 1 second = very bad
+        sender->chrony_synced = false;
+        printf("Chrony poll: chronyc not available\n");
+        return;
+    }
+
+    char line[1024];
+    if (fgets(line, sizeof(line), fp) == NULL) {
+        pclose(fp);
+        sender->chrony_stratum = 0;
+        sender->chrony_root_dispersion = 1.0;
+        sender->chrony_synced = false;
+        printf("Chrony poll: no output from chronyc\n");
+        return;
+    }
+    pclose(fp);
+
+    // Parse CSV: split on commas, extract fields 3, 12, 14
+    int field = 0;
+    char *token = strtok(line, ",");
+    int new_stratum = 0;
+    double new_dispersion = 1.0;
+    bool new_synced = false;
+
+    while (token != NULL) {
+        if (field == 3) {
+            new_stratum = atoi(token);
+        } else if (field == 12) {
+            new_dispersion = atof(token);
+        } else if (field == 14) {
+            // Leap status: "Normal"=0, "Insert"=1, "Delete"=2, "Not synchronised"=3
+            int leap = atoi(token);
+            new_synced = (leap != 3);
+        }
+        token = strtok(NULL, ",");
+        field++;
+    }
+
+    // If not synchronized, override stratum to 0
+    if (!new_synced) {
+        new_stratum = 0;
+    }
+
+    // Log changes
+    if (new_stratum != sender->chrony_stratum ||
+        new_synced != sender->chrony_synced) {
+        printf("Chrony status changed: stratum=%d synced=%s root_dispersion=%.6f s\n",
+               new_stratum, new_synced ? "yes" : "no", new_dispersion);
+    }
+
+    sender->chrony_stratum = new_stratum;
+    sender->chrony_root_dispersion = new_dispersion;
+    sender->chrony_synced = new_synced;
+}
+
+// --- LED control via sysfs --- //
+
+static const char *LED_TRIGGER_PATH = "/sys/class/leds/ACT/trigger";
+static const char *LED_BRIGHTNESS_PATH = "/sys/class/leds/ACT/brightness";
+static const char *LED_DELAY_ON_PATH = "/sys/class/leds/ACT/delay_on";
+static const char *LED_DELAY_OFF_PATH = "/sys/class/leds/ACT/delay_off";
+
+static void sysfs_write(const char *path, const char *value) {
+    FILE *fp = fopen(path, "w");
+    if (fp) {
+        fprintf(fp, "%s", value);
+        fclose(fp);
+    }
+}
+
+static void sysfs_read(const char *path, char *buf, size_t len) {
+    buf[0] = '\0';
+    FILE *fp = fopen(path, "r");
+    if (fp) {
+        // The trigger file shows [active] with brackets; read current value
+        char raw[256];
+        if (fgets(raw, sizeof(raw), fp)) {
+            // Find the [bracketed] active trigger
+            char *start = strchr(raw, '[');
+            char *end = start ? strchr(start, ']') : NULL;
+            if (start && end) {
+                size_t n = (size_t)(end - start - 1);
+                if (n >= len) n = len - 1;
+                memcpy(buf, start + 1, n);
+                buf[n] = '\0';
+            } else {
+                // Fallback: just copy first token
+                strncpy(buf, raw, len - 1);
+                buf[len - 1] = '\0';
+                // Remove trailing newline
+                char *nl = strchr(buf, '\n');
+                if (nl) *nl = '\0';
+            }
+        }
+        fclose(fp);
+    }
+}
+
+void led_init(irig_h_sender_t *sender) {
+    // Save current trigger so we can restore on cleanup
+    sysfs_read(LED_TRIGGER_PATH, sender->led_original_trigger,
+               sizeof(sender->led_original_trigger));
+    if (sender->led_original_trigger[0] != '\0') {
+        printf("LED: saved original trigger '%s'\n", sender->led_original_trigger);
+    }
+    // Take control: disable current trigger
+    sysfs_write(LED_TRIGGER_PATH, "none");
+}
+
+void led_set_solid(void) {
+    sysfs_write(LED_TRIGGER_PATH, "none");
+    sysfs_write(LED_BRIGHTNESS_PATH, "1");
+}
+
+void led_set_blink(int delay_on_ms, int delay_off_ms) {
+    sysfs_write(LED_TRIGGER_PATH, "timer");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", delay_on_ms);
+    sysfs_write(LED_DELAY_ON_PATH, buf);
+    snprintf(buf, sizeof(buf), "%d", delay_off_ms);
+    sysfs_write(LED_DELAY_OFF_PATH, buf);
+}
+
+void led_cleanup(irig_h_sender_t *sender) {
+    if (sender->led_original_trigger[0] != '\0') {
+        printf("LED: restoring trigger '%s'\n", sender->led_original_trigger);
+        sysfs_write(LED_TRIGGER_PATH, sender->led_original_trigger);
+    }
+}
+
+void update_led_status(irig_h_sender_t *sender) {
+    double dispersion_ms = sender->chrony_root_dispersion * 1000.0;
+    if (!sender->chrony_synced || dispersion_ms >= sender->warn_threshold_ms) {
+        led_set_blink(500, 500);
+    } else {
+        led_set_solid();
+    }
+}
+
 void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info, irig_bit_t *frame) {
     append_double(&sender->encoded_times, (double)mktime(time_info));
 
@@ -287,6 +464,19 @@ void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info, irig_b
     frame[pos++] = IRIG_ZERO;
     for (int i = 4; i < 8; i++) frame[pos++] = year_bcd[i] ? IRIG_ONE : IRIG_ZERO;
     frame[pos++] = IRIG_P;
+
+    // Overwrite sync status bits (NeuroKairos extension).
+    // Bits 42, 45 remain zero (reserved).
+    // Bits 43-44: encoded stratum (2 bits)
+    int stratum_enc = encode_stratum(sender->chrony_stratum);
+    frame[43] = (stratum_enc & 1) ? IRIG_ONE : IRIG_ZERO;
+    frame[44] = (stratum_enc & 2) ? IRIG_ONE : IRIG_ZERO;
+
+    // Bits 46-48: encoded root dispersion bucket (3 bits)
+    int disp_enc = encode_root_dispersion(sender->chrony_root_dispersion);
+    frame[46] = (disp_enc & 1) ? IRIG_ONE : IRIG_ZERO;
+    frame[47] = (disp_enc & 2) ? IRIG_ONE : IRIG_ZERO;
+    frame[48] = (disp_enc & 4) ? IRIG_ONE : IRIG_ZERO;
 }
 
 void init_timing_constants(void) {
@@ -434,6 +624,10 @@ void* continuous_irig_sending(void *arg) {
 
     printf("IRIG-H continuous transmission thread started\n");
 
+    // Poll chrony once at startup so the first frame has valid status bits
+    poll_chrony_status(sender);
+    update_led_status(sender);
+
     clock_gettime(CLOCK_REALTIME, &current_time);
     current_second = current_time.tv_sec;
     next_second = current_second + 1;
@@ -471,6 +665,10 @@ void* continuous_irig_sending(void *arg) {
                 ultra_fast_pulse(sender, pulse_ns);
             }
 
+            // Poll chrony after each full 60-bit frame (~every 60 seconds)
+            poll_chrony_status(sender);
+            update_led_status(sender);
+
             frame_ready = false;
         }
 
@@ -495,7 +693,14 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
     sender->sending_starts.data = malloc(sizeof(double) * 100);
     sender->sending_starts.length = 0;
     sender->sending_starts.capacity = 100;
-    
+
+    // Initialize chrony status to safe defaults (unsynchronized)
+    sender->chrony_stratum = 0;
+    sender->chrony_root_dispersion = 1.0;
+    sender->chrony_synced = false;
+    sender->warn_threshold_ms = 1.0;
+    sender->led_original_trigger[0] = '\0';
+
     time_t now = time(NULL);
     struct tm *tm_info = localtime(&now); // localtime is intentional here -- just for the output filename
     strftime(sender->timestamp_filename, sizeof(sender->timestamp_filename),
@@ -520,6 +725,7 @@ irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
     }
 
     init_gpio_cache(sender);
+    led_init(sender);
 
     return sender;
 }
@@ -558,6 +764,7 @@ void finish_irig_sender(irig_h_sender_t *sender) {
     if (sender->inverted_gpio_pin >= 0)
         gpio_write(sender->inverted_gpio_pin, 1);
 
+    led_cleanup(sender);
     gpio_cleanup();
 
     free(sender->encoded_times.data);
@@ -566,11 +773,13 @@ void finish_irig_sender(irig_h_sender_t *sender) {
 }
 
 void print_usage(const char *prog_name) {
-    printf("Usage: %s [-p PIN] [-n PIN] [-d] [-h]\n", prog_name);
-    printf("  -p PIN   BCM GPIO pin for normal output (default: 11, -1 to disable)\n");
-    printf("  -n PIN   BCM GPIO pin for inverted output (default: -1, disabled)\n");
-    printf("  -d       Enable debug mode\n");
-    printf("  -h       Print this help message and exit\n");
+    printf("Usage: %s [-p PIN] [-n PIN] [-w THRESHOLD] [-d] [-h]\n", prog_name);
+    printf("  -p PIN        BCM GPIO pin for normal output (default: 11, -1 to disable)\n");
+    printf("  -n PIN        BCM GPIO pin for inverted output (default: -1, disabled)\n");
+    printf("  -w THRESHOLD  LED warning threshold in ms (default: 1.0)\n");
+    printf("                LED blinks when root dispersion exceeds this value\n");
+    printf("  -d            Enable debug mode\n");
+    printf("  -h            Print this help message and exit\n");
     printf("\nPin numbers use BCM (Broadcom) GPIO numbering, not physical board pin numbers.\n");
 }
 
@@ -606,16 +815,20 @@ int validate_gpio_pin(int pin, const char *label) {
 int main(int argc, char *argv[]) {
     int normal_pin = 11;    // default: BCM GPIO 11
     int inverted_pin = -1;  // default: disabled
+    double warn_threshold_ms = 1.0;  // default LED warning threshold
 
     // Parse command-line arguments with getopt
     int opt;
-    while ((opt = getopt(argc, argv, "p:n:dh")) != -1) {
+    while ((opt = getopt(argc, argv, "p:n:w:dh")) != -1) {
         switch (opt) {
             case 'p':
                 normal_pin = atoi(optarg);
                 break;
             case 'n':
                 inverted_pin = atoi(optarg);
+                break;
+            case 'w':
+                warn_threshold_ms = atof(optarg);
                 break;
             case 'd':
                 debug_mode = 1;
@@ -668,8 +881,10 @@ int main(int argc, char *argv[]) {
         printf("Failed to initialize IRIG-H sender\n");
         return 1;
     }
+    sender->warn_threshold_ms = warn_threshold_ms;
 
     printf("IRIG-H sender initialized successfully\n");
+    printf("  LED warn threshold: %.2f ms\n", sender->warn_threshold_ms);
     start_irig_sender(sender);
     printf("IRIG-H transmission started\n");
 

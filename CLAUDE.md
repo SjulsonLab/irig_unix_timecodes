@@ -26,6 +26,9 @@ cd sender && make
 # Run with custom pins
 ./sender/irig_sender -p 17 -n 27
 
+# Run with custom LED warning threshold (blink when root dispersion > 2ms)
+./sender/irig_sender -w 2.0
+
 # Install Python package (editable/development mode)
 pip install -e .
 
@@ -51,8 +54,13 @@ python -m neurokairos.extract_from_dat recording.dat -o output.npz
 Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on any machine).
 
 ### Generation
-- `sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Runs as systemd service at Nice -20.
+- `sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Polls chrony every ~60 seconds and encodes sync status (stratum, root dispersion) in unused IRIG-H frame bits 43-44 and 46-48. Controls the RPi ACT LED to indicate sync quality. Runs as systemd service at Nice -20.
 - `neurokairos/irig_h_gpio.py:IrigHSender` — Python sender for testing only (uses pigpio daemon).
+
+### Chrony Integration
+- `scripts/install_chrony_server.sh` — Installs chrony + gpsd on the RPi with GPS. Configures PPS-disciplined stratum 1 NTP server.
+- `scripts/install_chrony_client.sh` — Installs chrony as NTP client (no GPS). Supports custom server (`--server`).
+- `scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
 
 ### Core Library
 - `neurokairos/irig_h_gpio.py` — Shared encoding/decoding library. Contains BCD encode/decode, pulse classification (`identify_pulse_length`), frame detection (`decode_irig_bits`), and POSIX timestamp conversion (`irig_h_to_posix`). Both the C sender and Python extraction tools implement the same IRIG-H frame structure.
@@ -72,7 +80,11 @@ Pulse classification thresholds are defined relative to `SENDING_BIT_LENGTH` (1 
 
 ## Data Formats
 
-NPZ output contains structured arrays with fields: `on_sample` (uint64), `off_sample` (uint64), `pulse_type` (int8: 0/1/2 for zero/one/P, -1 for error), `unix_time` (float64), `frame_id` (int32).
+NPZ output contains structured arrays with fields: `on_sample` (uint64), `off_sample` (uint64), `pulse_type` (int8: 0/1/2 for zero/one/P, -1 for error), `unix_time` (float64), `frame_id` (int32), `stratum` (int8: 1-4, -1 for unknown), `root_dispersion_bucket` (int8: 0-7, -1 for unknown).
+
+## Sync Status Encoding (NeuroKairos Extension)
+
+The C sender polls chrony every ~60 seconds and encodes sync quality in previously unused IRIG-H frame bits. Bits 43-44 carry a 2-bit stratum code (1→0, 2→1, 3→2, >=4→3). Bits 46-48 carry a 3-bit root dispersion bucket on a doubling scale from <0.25ms (0) to >=16ms (7). Bits 42 and 45 remain zero (reserved). Old recordings with all-zero status bits are ambiguous with stratum 1 / best dispersion. See `docs/irig-h-standard.md` for the full encoding table.
 
 ## Known Bug History
 
