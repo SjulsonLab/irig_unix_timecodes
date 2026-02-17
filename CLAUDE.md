@@ -89,4 +89,4 @@ The C sender polls chrony every ~60 seconds and encodes sync quality in previous
 ## Known Bug History
 
 - **Day-of-year off-by-one (C sender, fixed in `6def02b`):** C's `tm_yday` is 0-indexed (0-365) but IRIG-H expects 1-indexed (1-366). The original C sender omitted the `+1`, causing every transmitted day to be one too low. Python was never affected (`timetuple().tm_yday` is already 1-indexed). Old branches `less-cpu` and `charlie-irig` still have the unfixed code.
-- **`seconds + 1` in encoders is intentional:** Both the C and Python senders encode `seconds + 1` because frames are generated before the second boundary but start transmitting at the next second.
+- **Frames must start on minute boundaries:** The C sender waits for the next :00 second before transmitting its first frame. Each frame is 60 bits (60 seconds), so subsequent frames naturally align to minute boundaries. The BCD seconds field is always 0.

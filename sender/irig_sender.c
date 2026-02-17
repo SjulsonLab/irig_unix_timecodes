@@ -34,8 +34,10 @@
 #define GPCLR0    0x28
 #define GPLEV0    0x34
 
+#ifndef MOCK_GPIO
 static volatile unsigned *gpio_map = NULL;
 static int gpio_mem_fd = -1;
+#endif
 
 typedef enum {
     IRIG_ZERO = 0,
@@ -66,6 +68,15 @@ static const int HOURS_WEIGHTS[] = {1, 2, 4, 8, 10, 20};
 static const int DAY_OF_YEAR_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80, 100, 200};
 static const int DECISECONDS_WEIGHTS[] = {1, 2, 4, 8};
 static const int YEARS_WEIGHTS[] = {1, 2, 4, 8, 10, 20, 40, 80};
+
+// --- Mock GPIO support --- //
+#ifdef MOCK_GPIO
+static uint32_t mock_gpio_regs[2];  // dummy SET and CLR registers
+static FILE *mock_log = NULL;
+static char mock_log_path[256] = "/tmp/irig_mock.csv";
+#endif
+
+static int max_frames = 0;  // 0 = unlimited
 
 typedef struct {
     int sending_gpio_pin;
@@ -106,10 +117,38 @@ void signal_handler(int sig) {
     running = 0;
 }
 
+// ── Hardware-specific functions ─────────────────────────────────────────────
+
+#ifdef MOCK_GPIO
+
+int detect_pi_model() { return 4; }
+
+int gpio_init() { return 0; }
+
+void gpio_cleanup() {}
+
+void gpio_set_output(int pin) {
+    (void)pin;
+}
+
+void gpio_write(int pin, int value) {
+    (void)pin;
+    (void)value;
+}
+
+void init_gpio_cache(irig_h_sender_t *sender) {
+    sender->gpio_set_reg = (volatile unsigned *)&mock_gpio_regs[0];
+    sender->gpio_clr_reg = (volatile unsigned *)&mock_gpio_regs[1];
+    sender->gpio_mask = 1;
+    sender->inverted_gpio_mask = 0;
+}
+
+#else  // !MOCK_GPIO
+
 int detect_pi_model() {
     FILE *fp = fopen("/proc/device-tree/model", "r");
     if (!fp) return 2;
-    
+
     char model[256];
     if (fgets(model, sizeof(model), fp)) {
         fclose(fp);
@@ -128,7 +167,7 @@ int detect_pi_model() {
 int gpio_init() {
     int pi_model = detect_pi_model();
     unsigned gpio_base;
-    
+
     switch (pi_model) {
         case 1:
             gpio_base = BCM2708_PERI_BASE_RPI1 + GPIO_BASE_OFFSET;
@@ -140,7 +179,7 @@ int gpio_init() {
             gpio_base = BCM2708_PERI_BASE_RPI2 + GPIO_BASE_OFFSET;
             break;
     }
-    
+
     printf("Detected Raspberry Pi model %d, using GPIO base 0x%08X\n", pi_model, gpio_base);
 
     gpio_mem_fd = open("/dev/mem", O_RDWR | O_SYNC);
@@ -148,7 +187,7 @@ int gpio_init() {
         printf("Error: Cannot open /dev/mem. Are you running as root?\n");
         return -1;
     }
-    
+
     gpio_map = (volatile unsigned *)mmap(
         NULL,
         BLOCK_SIZE,
@@ -157,13 +196,13 @@ int gpio_init() {
         gpio_mem_fd,
         gpio_base
     );
-    
+
     if (gpio_map == MAP_FAILED) {
         printf("Error: mmap failed: %s\n", strerror(errno));
         close(gpio_mem_fd);
         return -1;
     }
-    
+
     printf("GPIO memory mapped successfully\n");
     return 0;
 }
@@ -181,13 +220,13 @@ void gpio_cleanup() {
 
 void gpio_set_output(int pin) {
     if (gpio_map == NULL) return;
-    
+
     int reg = pin / 10;
     int shift = (pin % 10) * 3;
 
     *(gpio_map + reg) &= ~(7 << shift);
     *(gpio_map + reg) |= (1 << shift);
-    
+
     printf("GPIO %d set as output\n", pin);
 }
 
@@ -213,6 +252,8 @@ void init_gpio_cache(irig_h_sender_t *sender) {
     sender->gpio_mask = (sender->sending_gpio_pin >= 0) ? (1 << sender->sending_gpio_pin) : 0;
     sender->inverted_gpio_mask = (sender->inverted_gpio_pin >= 0) ? (1 << sender->inverted_gpio_pin) : 0;
 }
+
+#endif  // MOCK_GPIO
 
 double_array_t* create_double_array(size_t initial_capacity) {
     double_array_t *arr = malloc(sizeof(double_array_t));
@@ -270,6 +311,17 @@ int encode_root_dispersion(double dispersion_sec) {
     if (dispersion_ms < 16.0)  return 6;
     return 7;  // >= 16 ms or not synchronized
 }
+
+#ifdef MOCK_GPIO
+
+// In mock mode, report stratum 1 / excellent sync (no chronyc available)
+void poll_chrony_status(irig_h_sender_t *sender) {
+    sender->chrony_stratum = 1;
+    sender->chrony_root_dispersion = 0.0001;  // 0.1 ms
+    sender->chrony_synced = true;
+}
+
+#else  // !MOCK_GPIO
 
 // Poll chrony for current sync status via `chronyc -c tracking`.
 // CSV fields (0-indexed): 3=stratum, 12=root dispersion, 14=leap status
@@ -333,7 +385,31 @@ void poll_chrony_status(irig_h_sender_t *sender) {
     sender->chrony_synced = new_synced;
 }
 
+#endif  // MOCK_GPIO
+
 // --- LED control via sysfs --- //
+
+#ifdef MOCK_GPIO
+
+void led_init(irig_h_sender_t *sender) {
+    sender->led_original_trigger[0] = '\0';
+}
+
+void led_set_solid(void) {}
+
+void led_set_blink(int delay_on_ms, int delay_off_ms) {
+    (void)delay_on_ms; (void)delay_off_ms;
+}
+
+void led_cleanup(irig_h_sender_t *sender) {
+    (void)sender;
+}
+
+void update_led_status(irig_h_sender_t *sender) {
+    (void)sender;
+}
+
+#else  // !MOCK_GPIO
 
 static const char *LED_TRIGGER_PATH = "/sys/class/leds/ACT/trigger";
 static const char *LED_BRIGHTNESS_PATH = "/sys/class/leds/ACT/brightness";
@@ -417,13 +493,15 @@ void update_led_status(irig_h_sender_t *sender) {
     }
 }
 
+#endif  // MOCK_GPIO
+
 void generate_irig_h_frame(irig_h_sender_t *sender, struct tm *time_info, irig_bit_t *frame) {
     append_double(&sender->encoded_times, (double)mktime(time_info));
 
     int seconds_bcd[7], minutes_bcd[7], hours_bcd[6];
     int day_of_year_bcd[10], deciseconds_bcd[4], year_bcd[8];
-    
-    bcd_encode(time_info->tm_sec + 1, SECONDS_WEIGHTS, 7, seconds_bcd);
+
+    bcd_encode(time_info->tm_sec, SECONDS_WEIGHTS, 7, seconds_bcd);
     bcd_encode(time_info->tm_min, MINUTES_WEIGHTS, 7, minutes_bcd);
     bcd_encode(time_info->tm_hour, HOURS_WEIGHTS, 6, hours_bcd);
     bcd_encode(time_info->tm_yday + 1, DAY_OF_YEAR_WEIGHTS, 10, day_of_year_bcd);
@@ -588,6 +666,16 @@ void ultra_fast_pulse(irig_h_sender_t *sender, uint64_t pulse_duration_ns) {
 
     *(sender->gpio_clr_reg) = sender->gpio_mask;
     *(sender->gpio_set_reg) = sender->inverted_gpio_mask;
+
+#ifdef MOCK_GPIO
+    if (mock_log) {
+        struct timespec falling_ts;
+        clock_gettime(CLOCK_REALTIME, &falling_ts);
+        fprintf(mock_log, "%llu,%llu\n",
+                (unsigned long long)start_ns,
+                (unsigned long long)timespec_to_ns(&falling_ts));
+    }
+#endif
 }
 
 // Pre-calculate timing for the next frame
@@ -605,8 +693,9 @@ void precalculate_next_frame(irig_h_sender_t *sender, time_t target_second) {
 void* continuous_irig_sending(void *arg) {
     irig_h_sender_t *sender = (irig_h_sender_t*)arg;
     struct timespec current_time;
-    time_t current_second, next_second;
-    bool frame_ready = false;
+    time_t current_second;
+    time_t next_frame_time;
+    int frames_sent = 0;
 
     static int constants_initialized = 0;
     if (!constants_initialized) {
@@ -614,6 +703,7 @@ void* continuous_irig_sending(void *arg) {
         constants_initialized = 1;
     }
 
+#ifndef MOCK_GPIO
     struct sched_param param;
     param.sched_priority = 80;
     if (sched_setscheduler(0, SCHED_FIFO, &param) < 0) {
@@ -621,6 +711,7 @@ void* continuous_irig_sending(void *arg) {
     } else {
         printf("Set SCHED_FIFO with priority 80\n");
     }
+#endif
 
     printf("IRIG-H continuous transmission thread started\n");
 
@@ -628,20 +719,18 @@ void* continuous_irig_sending(void *arg) {
     poll_chrony_status(sender);
     update_led_status(sender);
 
+    // Align first frame to next minute boundary so BCD seconds field is
+    // always 0 and frames span :00 to :59.
     clock_gettime(CLOCK_REALTIME, &current_time);
-    current_second = current_time.tv_sec;
-    next_second = current_second + 1;
-    precalculate_next_frame(sender, next_second);
-    
+    next_frame_time = ((current_time.tv_sec / 60) + 1) * 60;
+    current_second = next_frame_time - 1;
+    precalculate_next_frame(sender, next_frame_time);
+
+    printf("Waiting for next minute boundary (%ld seconds)...\n",
+           (long)(next_frame_time - current_time.tv_sec));
+
     while (sender->running && running) {
         clock_gettime(CLOCK_REALTIME, &current_time);
-
-        long ns_into_second = current_time.tv_nsec;
-        if (ns_into_second >= 800000000L && !frame_ready) {
-            time_t upcoming_second = current_time.tv_sec + 1;
-            precalculate_next_frame(sender, upcoming_second);
-            frame_ready = true;
-        }
 
         if (current_time.tv_sec > current_second) {
             current_second = current_time.tv_sec;
@@ -665,15 +754,32 @@ void* continuous_irig_sending(void *arg) {
                 ultra_fast_pulse(sender, pulse_ns);
             }
 
+            // Check frame limit
+            frames_sent++;
+            if (max_frames > 0 && frames_sent >= max_frames) {
+                printf("Completed %d frame(s), exiting.\n", frames_sent);
+                running = 0;
+                break;
+            }
+
             // Poll chrony after each full 60-bit frame (~every 60 seconds)
             poll_chrony_status(sender);
             update_led_status(sender);
 
-            frame_ready = false;
+            // Prepare next frame at next minute boundary
+            next_frame_time += 60;
+            precalculate_next_frame(sender, next_frame_time);
+            current_second = next_frame_time - 1;
         }
 
         usleep(10000);
     }
+
+#ifdef MOCK_GPIO
+    if (mock_log) {
+        fflush(mock_log);
+    }
+#endif
 
     printf("IRIG-H transmission thread stopping\n");
     return NULL;
@@ -681,15 +787,15 @@ void* continuous_irig_sending(void *arg) {
 
 irig_h_sender_t* create_irig_h_sender(int gpio_pin, int inverted_gpio_pin) {
     irig_h_sender_t *sender = malloc(sizeof(irig_h_sender_t));
-    
+
     sender->sending_gpio_pin = gpio_pin;
     sender->inverted_gpio_pin = inverted_gpio_pin;
     sender->running = false;
-    
+
     sender->encoded_times.data = malloc(sizeof(double) * 100);
     sender->encoded_times.length = 0;
     sender->encoded_times.capacity = 100;
-    
+
     sender->sending_starts.data = malloc(sizeof(double) * 100);
     sender->sending_starts.length = 0;
     sender->sending_starts.capacity = 100;
@@ -741,15 +847,15 @@ void write_timestamps_to_file(irig_h_sender_t *sender) {
         printf("Could not open file for writing: %s\n", sender->timestamp_filename);
         return;
     }
-    
+
     fprintf(file, "Encoded times,Sending starts\n");
-    size_t min_length = (sender->encoded_times.length < sender->sending_starts.length) 
+    size_t min_length = (sender->encoded_times.length < sender->sending_starts.length)
                        ? sender->encoded_times.length : sender->sending_starts.length;
-    
+
     for (size_t i = 0; i < min_length; i++) {
         fprintf(file, "%f,%f\n", sender->encoded_times.data[i], sender->sending_starts.data[i]);
     }
-    
+
     fclose(file);
     printf("Timestamps written to %s\n", sender->timestamp_filename);
 }
@@ -773,13 +879,17 @@ void finish_irig_sender(irig_h_sender_t *sender) {
 }
 
 void print_usage(const char *prog_name) {
-    printf("Usage: %s [-p PIN] [-n PIN] [-w THRESHOLD] [-d] [-h]\n", prog_name);
+    printf("Usage: %s [-p PIN] [-n PIN] [-w THRESHOLD] [-d] [-h] [--frames N] [--mock-log FILE]\n", prog_name);
     printf("  -p PIN        BCM GPIO pin for normal output (default: 11, -1 to disable)\n");
     printf("  -n PIN        BCM GPIO pin for inverted output (default: -1, disabled)\n");
     printf("  -w THRESHOLD  LED warning threshold in ms (default: 1.0)\n");
     printf("                LED blinks when root dispersion exceeds this value\n");
     printf("  -d            Enable debug mode\n");
     printf("  -h            Print this help message and exit\n");
+    printf("  --frames N    Exit after N frames (default: unlimited)\n");
+#ifdef MOCK_GPIO
+    printf("  --mock-log F  Write pulse timing CSV to F (default: %s)\n", mock_log_path);
+#endif
     printf("\nPin numbers use BCM (Broadcom) GPIO numbering, not physical board pin numbers.\n");
 }
 
@@ -817,9 +927,17 @@ int main(int argc, char *argv[]) {
     int inverted_pin = -1;  // default: disabled
     double warn_threshold_ms = 1.0;  // default LED warning threshold
 
-    // Parse command-line arguments with getopt
+    // Long options for --frames and --mock-log
+    static struct option long_options[] = {
+        {"frames",   required_argument, 0, 'F'},
+        {"mock-log", required_argument, 0, 'M'},
+        {"help",     no_argument,       0, 'h'},
+        {0, 0, 0, 0}
+    };
+
+    // Parse command-line arguments with getopt_long
     int opt;
-    while ((opt = getopt(argc, argv, "p:n:w:dh")) != -1) {
+    while ((opt = getopt_long(argc, argv, "p:n:w:dh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'p':
                 normal_pin = atoi(optarg);
@@ -836,6 +954,21 @@ int main(int argc, char *argv[]) {
             case 'h':
                 print_usage(argv[0]);
                 return 0;
+            case 'F':
+                max_frames = atoi(optarg);
+                if (max_frames <= 0) {
+                    fprintf(stderr, "Error: --frames must be a positive integer\n");
+                    return 1;
+                }
+                break;
+            case 'M':
+#ifdef MOCK_GPIO
+                strncpy(mock_log_path, optarg, sizeof(mock_log_path) - 1);
+                mock_log_path[sizeof(mock_log_path) - 1] = '\0';
+#else
+                printf("Warning: --mock-log is only available in mock mode (compile with -DMOCK_GPIO)\n");
+#endif
+                break;
             default:
                 print_usage(argv[0]);
                 return 1;
@@ -846,7 +979,8 @@ int main(int argc, char *argv[]) {
         printf("Debug mode enabled\n");
     }
 
-    // Validate pin numbers
+#ifndef MOCK_GPIO
+    // Validate pin numbers (only meaningful for real GPIO)
     if (validate_gpio_pin(normal_pin, "Normal") < 0) return 1;
     if (validate_gpio_pin(inverted_pin, "Inverted") < 0) return 1;
 
@@ -860,10 +994,21 @@ int main(int argc, char *argv[]) {
     if (normal_pin == -1 && inverted_pin == -1) {
         printf("Warning: Both output pins are disabled (-1). No GPIO output will be generated.\n");
     }
+#endif
 
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 
+#ifdef MOCK_GPIO
+    printf("IRIG-H Timecode Sender starting (MOCK GPIO mode)...\n");
+    mock_log = fopen(mock_log_path, "w");
+    if (!mock_log) {
+        fprintf(stderr, "Error: Cannot open mock log file: %s\n", mock_log_path);
+        return 1;
+    }
+    fprintf(mock_log, "rising_edge_ns,falling_edge_ns\n");
+    printf("Mock log: %s\n", mock_log_path);
+#else
     // Print startup info with actual pin configuration
     printf("IRIG-H Timecode Sender starting...\n");
     if (normal_pin >= 0)
@@ -875,10 +1020,18 @@ int main(int argc, char *argv[]) {
     else
         printf("  Inverted output: disabled\n");
     printf("Using direct hardware register access\n");
+#endif
+
+    if (max_frames > 0) {
+        printf("  Frame limit:     %d\n", max_frames);
+    }
 
     irig_h_sender_t *sender = create_irig_h_sender(normal_pin, inverted_pin);
     if (!sender) {
         printf("Failed to initialize IRIG-H sender\n");
+#ifdef MOCK_GPIO
+        if (mock_log) fclose(mock_log);
+#endif
         return 1;
     }
     sender->warn_threshold_ms = warn_threshold_ms;
@@ -895,6 +1048,13 @@ int main(int argc, char *argv[]) {
     printf("Stopping IRIG-H sender...\n");
     finish_irig_sender(sender);
     printf("IRIG-H sender stopped\n");
+
+#ifdef MOCK_GPIO
+    if (mock_log) {
+        fclose(mock_log);
+        printf("Mock log written to %s\n", mock_log_path);
+    }
+#endif
 
     return 0;
 }
