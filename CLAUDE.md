@@ -36,61 +36,47 @@ cd sender && make
 ./sender/irig_sender -w 2.0
 
 # Install Python package (editable/development mode)
-pip install -e .
+pip install -e ".[test]"
 
-# Or install normally
-pip install .
-```
-
-## Key Usage
-
-```bash
-# Extract IRIG timecodes from a DAT recording file (after pip install)
-neurokairos-extract recording.dat -o output.npz
-
-# Or run directly
-python -m neurokairos.extract_from_dat recording.dat -o output.npz
-
-# extract_from_dat.py options: -t/--threshold (default 2500), -c/--channel (default 32),
-# --total-channels (default 40), --chunk-size (default 2500000)
+# Run tests
+pytest tests/ -v
 ```
 
 ## Architecture
 
 Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on any machine).
 
-### Generation
+### Generation (C sender)
 - `sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Polls chrony every ~60 seconds and encodes sync status (stratum, root dispersion) in unused IRIG-H frame bits 43-44 and 46-48. Controls the RPi ACT LED to indicate sync quality. Runs as systemd service at Nice -20.
-- `neurokairos/irig_h_gpio.py:IrigHSender` — Python sender for testing only (uses pigpio daemon).
 
 ### Chrony Integration
 - `scripts/install_chrony_server.sh` — Installs chrony + gpsd on the RPi with GPS. Configures PPS-disciplined stratum 1 NTP server.
 - `scripts/install_chrony_client.sh` — Installs chrony as NTP client (no GPS). Supports custom server (`--server`).
 - `scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
 
-### Core Library
-- `neurokairos/irig_h_gpio.py` — Shared encoding/decoding library. Contains BCD encode/decode, pulse classification (`identify_pulse_length`), frame detection (`decode_irig_bits`), and POSIX timestamp conversion (`irig_h_to_posix`). Both the C sender and Python extraction tools implement the same IRIG-H frame structure.
+### Core Python Library (`neurokairos/`)
+- `ttl.py` — Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths`. NumPy only, no dependencies on other modules.
+- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional `np.interp`, save/load to NPZ, JSON-serializable metadata.
+- `irig.py` — Complete IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding (complete + partial), robust handling of missing/extra pulses and concatenated files, `build_clock_table` orchestrator, plus top-level entry points `decode_dat_irig` and `decode_intervals_irig`.
+- `sglx.py` — SpikeGLX `.meta` reader + `decode_sglx_irig` entry point.
+- `video.py` — Video LED extraction + `decode_video_irig` entry point. OpenCV (`cv2`) is an optional dependency.
 
-### Decoding/Extraction
-- `neurokairos/extract_from_dat.py` — Main CLI tool. `IRIGExtractor` class reads binary DAT files in chunks, detects edges, classifies pulses, decodes frames, detects discontinuities, and outputs to compressed NPZ.
-- `neurokairos/extract_from_camera_events.py` — Processes camera event CSVs looking for TimeP/TimeN pin events.
-- `neurokairos/vendor/readSGLX.py` — Vendored SpikeGLX binary/metadata file reader (supports IMEC, NIDQ, OBX data types). Used upstream to extract IRIG channels from SpikeGLX recordings.
+### Public API (`neurokairos/__init__.py`)
+- `ClockTable` — sparse time mapping
+- `bcd_encode`, `bcd_decode` — BCD encoding/decoding
+- `decode_dat_irig` — decode from interleaved int16 `.dat` files
+- `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
+- `decode_video_irig` — decode from video files with IRIG LED
+- `decode_intervals_irig` — decode from pre-extracted pulse intervals
+- BCD weight constants: `SECONDS_WEIGHTS`, `MINUTES_WEIGHTS`, `HOURS_WEIGHTS`, `DAY_OF_YEAR_WEIGHTS`, `DECISECONDS_WEIGHTS`, `YEARS_WEIGHTS`
 
-### Analysis
-- `neurokairos/bin_analysis.py` — Analyzes bit-packed binary IRIG data with generator-based unpacking.
-- `neurokairos/npz_analysis.py` — Analyzes NPZ output for sampling rate, IRIG-vs-PPS error/latency, and systematic offset detection.
+## Key Constants (neurokairos/irig.py)
 
-## Key Constants (neurokairos/irig_h_gpio.py)
-
-Pulse classification thresholds are defined relative to `SENDING_BIT_LENGTH` (1 second) and `DECODE_BIT_PERIOD` (1/30000s). When modifying thresholds, both `P_THRESHOLD`, `ONE_THRESHOLD`, and `ZERO_THRESHOLD` must stay consistent with the 0.2/0.5/0.8 pulse width ratios.
-
-## Data Formats
-
-NPZ output contains structured arrays with fields: `on_sample` (uint64), `off_sample` (uint64), `pulse_type` (int8: 0/1/2 for zero/one/P, -1 for error), `unix_time` (float64), `frame_id` (int32), `stratum` (int8: 1-4, -1 for unknown), `root_dispersion_bucket` (int8: 0-7, -1 for unknown).
+Pulse-width fractions of 1 second: `PULSE_FRAC_ZERO` (0.2), `PULSE_FRAC_ONE` (0.5), `PULSE_FRAC_MARKER` (0.8). Classification boundaries are midpoints: 0.35 (0/1), 0.65 (1/marker). Min valid: 0.1, max: 0.95.
 
 ## Sync Status Encoding (NeuroKairos Extension)
 
-The C sender polls chrony every ~60 seconds and encodes sync quality in previously unused IRIG-H frame bits. Bits 43-44 carry a 2-bit stratum code (1→0, 2→1, 3→2, >=4→3). Bits 46-48 carry a 3-bit root dispersion bucket on a doubling scale from <0.25ms (0) to >=16ms (7). Bits 42 and 45 remain zero (reserved). Old recordings with all-zero status bits are ambiguous with stratum 1 / best dispersion. See `docs/irig-h-standard.md` for the full encoding table.
+The C sender polls chrony every ~60 seconds and encodes sync quality in previously unused IRIG-H frame bits. Bits 43-44 carry a 2-bit stratum code (1->0, 2->1, 3->2, >=4->3). Bits 46-48 carry a 3-bit root dispersion bucket on a doubling scale from <0.25ms (0) to >=16ms (7). Bits 42 and 45 remain zero (reserved). Old recordings with all-zero status bits are ambiguous with stratum 1 / best dispersion. See `docs/irig-h-standard.md` for the full encoding table.
 
 ## Known Bug History
 
