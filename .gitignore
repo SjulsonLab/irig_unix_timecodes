@@ -2,6 +2,7 @@
 
 # Compiled C sender binary
 sender/irig_sender
+sender/irig_sender_mock
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
