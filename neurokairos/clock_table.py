@@ -1,10 +1,13 @@
 import datetime as _dt
 import json as _json
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
+
+_EXTRAP_LIMIT_S = 1.5
 
 
 @dataclass
@@ -39,12 +42,100 @@ class ClockTable:
             )
 
     def source_to_reference(self, values) -> np.ndarray:
-        """Convert source-domain values to reference-domain via interpolation."""
-        return np.interp(values, self.source, self.reference)
+        """Convert source-domain values to reference-domain via interpolation.
+
+        Linearly extrapolates up to 1.5 s beyond the ClockTable boundaries
+        (one IRIG-H pulse interval).  Beyond that, clamps to the boundary
+        value and issues a warning.
+        """
+        values_arr = np.asarray(values, dtype=np.float64)
+        scalar = values_arr.ndim == 0
+        v = np.atleast_1d(values_arr)
+        result = np.interp(v, self.source, self.reference)
+
+        below = v < self.source[0]
+        if np.any(below):
+            slope = (self.reference[1] - self.reference[0]) / (
+                self.source[1] - self.source[0]
+            )
+            extrap = self.reference[0] + (v[below] - self.source[0]) * slope
+            max_dist = float(np.max(self.reference[0] - extrap))
+            if max_dist <= _EXTRAP_LIMIT_S:
+                result[below] = extrap
+            else:
+                warnings.warn(
+                    f"source_to_reference: extrapolating {max_dist:.1f} s before "
+                    f"the first ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
+                    f"limit. Clamping to boundary value.",
+                    stacklevel=2,
+                )
+
+        above = v > self.source[-1]
+        if np.any(above):
+            slope = (self.reference[-1] - self.reference[-2]) / (
+                self.source[-1] - self.source[-2]
+            )
+            extrap = self.reference[-1] + (v[above] - self.source[-1]) * slope
+            max_dist = float(np.max(extrap - self.reference[-1]))
+            if max_dist <= _EXTRAP_LIMIT_S:
+                result[above] = extrap
+            else:
+                warnings.warn(
+                    f"source_to_reference: extrapolating {max_dist:.1f} s beyond "
+                    f"the last ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
+                    f"limit. Clamping to boundary value.",
+                    stacklevel=2,
+                )
+
+        return result[0] if scalar else result
 
     def reference_to_source(self, values) -> np.ndarray:
-        """Convert reference-domain values to source-domain via interpolation."""
-        return np.interp(values, self.reference, self.source)
+        """Convert reference-domain values to source-domain via interpolation.
+
+        Linearly extrapolates up to 1.5 s beyond the ClockTable boundaries
+        (one IRIG-H pulse interval).  Beyond that, clamps to the boundary
+        value and issues a warning.
+        """
+        values_arr = np.asarray(values, dtype=np.float64)
+        scalar = values_arr.ndim == 0
+        v = np.atleast_1d(values_arr)
+        result = np.interp(v, self.reference, self.source)
+
+        below = v < self.reference[0]
+        if np.any(below):
+            slope = (self.source[1] - self.source[0]) / (
+                self.reference[1] - self.reference[0]
+            )
+            extrap = self.source[0] + (v[below] - self.reference[0]) * slope
+            max_dist = float(np.max(self.reference[0] - v[below]))
+            if max_dist <= _EXTRAP_LIMIT_S:
+                result[below] = extrap
+            else:
+                warnings.warn(
+                    f"reference_to_source: extrapolating {max_dist:.1f} s before "
+                    f"the first ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
+                    f"limit. Clamping to boundary value.",
+                    stacklevel=2,
+                )
+
+        above = v > self.reference[-1]
+        if np.any(above):
+            slope = (self.source[-1] - self.source[-2]) / (
+                self.reference[-1] - self.reference[-2]
+            )
+            extrap = self.source[-1] + (v[above] - self.reference[-1]) * slope
+            max_dist = float(np.max(v[above] - self.reference[-1]))
+            if max_dist <= _EXTRAP_LIMIT_S:
+                result[above] = extrap
+            else:
+                warnings.warn(
+                    f"reference_to_source: extrapolating {max_dist:.1f} s beyond "
+                    f"the last ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
+                    f"limit. Clamping to boundary value.",
+                    stacklevel=2,
+                )
+
+        return result[0] if scalar else result
 
     def save(self, path: Union[str, Path]) -> None:
         """Save to an NPZ file."""

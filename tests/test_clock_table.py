@@ -1,9 +1,10 @@
 import os
+import warnings
 
 import numpy as np
 import pytest
 
-from neurokairos.clock_table import ClockTable
+from neurokairos.clock_table import ClockTable, _EXTRAP_LIMIT_S
 
 
 class TestConstruction:
@@ -108,6 +109,104 @@ class TestInterpolation:
         refs = ct.source_to_reference(sources)
         recovered = ct.reference_to_source(refs)
         np.testing.assert_allclose(recovered, sources, atol=1e-6)
+
+    def test_scalar_input(self, ct):
+        result = ct.source_to_reference(15000.0)
+        assert isinstance(result, (float, np.floating))
+        np.testing.assert_allclose(result, 1000.5)
+
+    def test_scalar_input_reference_to_source(self, ct):
+        result = ct.reference_to_source(1000.5)
+        assert isinstance(result, (float, np.floating))
+        np.testing.assert_allclose(result, 15000.0)
+
+
+class TestExtrapolation:
+    """Extrapolation behavior when values fall outside the ClockTable range."""
+
+    @pytest.fixture
+    def ct_offset(self):
+        """ClockTable where source starts at 30000 (1 s into a 30 kHz recording).
+
+        This simulates a recording where the first IRIG pulse is detected
+        1 second after the recording starts.
+        """
+        return ClockTable(
+            source=np.array([30000.0, 60000.0, 90000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+
+    def test_source_to_reference_extrapolates_below(self, ct_offset):
+        """source_to_reference(0.0) should extrapolate back to sample 0."""
+        result = ct_offset.source_to_reference(0.0)
+        # slope = 1/30000 s/sample, so 30000 samples back = 1 second
+        np.testing.assert_allclose(result, 999.0)
+
+    def test_source_to_reference_extrapolates_above(self, ct_offset):
+        result = ct_offset.source_to_reference(105000.0)
+        # 15000 samples beyond source[-1], slope = 1/30000
+        np.testing.assert_allclose(result, 1002.5)
+
+    def test_reference_to_source_extrapolates_below(self, ct_offset):
+        result = ct_offset.reference_to_source(999.0)
+        np.testing.assert_allclose(result, 0.0)
+
+    def test_reference_to_source_extrapolates_above(self, ct_offset):
+        result = ct_offset.reference_to_source(1002.5)
+        np.testing.assert_allclose(result, 105000.0)
+
+    def test_extrapolation_round_trip(self, ct_offset):
+        """Extrapolated values should round-trip correctly."""
+        ref = ct_offset.source_to_reference(0.0)
+        recovered = ct_offset.reference_to_source(ref)
+        np.testing.assert_allclose(recovered, 0.0, atol=1e-6)
+
+    def test_no_warning_within_limit(self, ct_offset):
+        """Extrapolation within 1.5 s should not warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ct_offset.source_to_reference(0.0)  # 1.0 s extrapolation
+
+    def test_warning_beyond_limit(self):
+        """Extrapolation beyond 1.5 s should warn and clamp."""
+        ct = ClockTable(
+            source=np.array([90000.0, 120000.0, 150000.0]),
+            reference=np.array([1003.0, 1004.0, 1005.0]),
+            nominal_rate=30000.0,
+        )
+        # source=0.0 is 90000 samples = 3.0 s before first entry
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.source_to_reference(0.0)
+        # Should clamp to boundary value
+        np.testing.assert_allclose(result, 1003.0)
+
+    def test_warning_beyond_limit_above(self):
+        ct = ClockTable(
+            source=np.array([0.0, 30000.0, 60000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+        # 120000 samples = 2.0 s beyond last entry
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.source_to_reference(120000.0)
+        np.testing.assert_allclose(result, 1002.0)
+
+    def test_reference_to_source_warning_beyond_limit(self):
+        ct = ClockTable(
+            source=np.array([0.0, 30000.0, 60000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.reference_to_source(998.0)  # 2.0 s before
+        np.testing.assert_allclose(result, 0.0)
+
+    def test_array_extrapolation(self, ct_offset):
+        """Extrapolation works correctly for arrays with mixed in/out values."""
+        values = np.array([0.0, 30000.0, 60000.0, 90000.0])
+        result = ct_offset.source_to_reference(values)
+        np.testing.assert_allclose(result, [999.0, 1000.0, 1001.0, 1002.0])
 
 
 class TestMetadata:

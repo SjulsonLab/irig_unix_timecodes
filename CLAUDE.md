@@ -56,7 +56,7 @@ Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on
 
 ### Core Python Library (`neurokairos/`)
 - `ttl.py` — Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths`. NumPy only, no dependencies on other modules.
-- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional `np.interp`, save/load to NPZ, JSON-serializable metadata.
+- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional interpolation (linear extrapolation up to 1.5 s beyond boundaries; warns and clamps beyond that), save/load to NPZ, JSON-serializable metadata.
 - `irig.py` — Complete IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding (complete + partial), robust handling of missing/extra pulses and concatenated files, `build_clock_table` orchestrator, plus top-level entry points `decode_dat_irig` and `decode_intervals_irig`.
 - `sglx.py` — SpikeGLX `.meta` reader + `decode_sglx_irig` entry point.
 - `video.py` — Video LED extraction + `decode_video_irig` entry point. OpenCV (`cv2`) is an optional dependency.
