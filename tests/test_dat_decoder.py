@@ -15,7 +15,7 @@ class TestDecodeDatIrig:
     def test_entry_count(self, generate_test_dat):
         meta = generate_test_dat
         ct = decode_dat_irig(meta["path"], meta["n_channels"], meta["irig_channel"])
-        assert len(ct.source) == meta["duration_s"]
+        assert len(ct.source) == len(meta["expected_pairs"])
 
     def test_monotonically_increasing(self, generate_test_dat):
         meta = generate_test_dat
@@ -80,7 +80,9 @@ class TestDecodeDatIrig:
     def test_metadata_decoding_stats(self, generate_test_dat):
         meta = generate_test_dat
         ct = decode_dat_irig(meta["path"], meta["n_channels"], meta["irig_channel"])
-        assert ct.metadata["n_raw_pulses"] == meta["duration_s"]
+        # One fewer raw pulse: the signal starts HIGH so the first pulse
+        # has no detectable rising edge.
+        assert ct.metadata["n_raw_pulses"] == len(meta["expected_pairs"])
         assert ct.metadata["n_extra_removed"] == 0
         assert ct.metadata["n_missing_gaps"] == 0
         assert ct.metadata["n_frames_decoded"] >= 1
@@ -139,7 +141,7 @@ class TestDecodeDatIrigExtraPulses:
     def test_same_count_as_clean(self, generate_test_dat_extra_pulses):
         meta = generate_test_dat_extra_pulses
         ct = decode_dat_irig(meta["path"], meta["n_channels"], meta["irig_channel"])
-        assert len(ct.source) == meta["duration_s"]
+        assert len(ct.source) == len(meta["expected_pairs"])
 
     def test_timestamps_match_clean(self, generate_test_dat_extra_pulses):
         meta = generate_test_dat_extra_pulses
@@ -187,9 +189,11 @@ class TestDecodeDatIrigConcatenated:
     def test_time_jump_at_boundary(self, generate_test_dat_concatenated):
         meta = generate_test_dat_concatenated
         ct = decode_dat_irig(meta["path"], meta["n_channels"], meta["irig_channel"])
-        # Reference diffs should be 1.0 everywhere EXCEPT at the boundary
+        # Reference diffs should be 1.0 everywhere EXCEPT at the boundary.
+        # Seg1 has seg1_duration - 1 entries (pulse 0 lost — starts HIGH),
+        # so the boundary diff is at index seg1_duration - 2.
         ref_diffs = np.diff(ct.reference)
-        boundary = meta["seg1_duration"] - 1  # diff index at the junction
+        boundary = meta["seg1_duration"] - 2  # diff index at the junction
         # All diffs except boundary should be ~1.0
         normal = np.concatenate([ref_diffs[:boundary], ref_diffs[boundary + 1:]])
         np.testing.assert_allclose(normal, 1.0, atol=0.01)

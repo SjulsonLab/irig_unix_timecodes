@@ -52,8 +52,10 @@ class TestDetectEdges:
         signal = np.zeros(100, dtype=np.float64)
         signal[0:40] = 10000.0
         rising, falling = detect_edges(signal, 5000.0)
-        # Signal starts HIGH — rising edge at sample 0, falling at 40
-        np.testing.assert_array_equal(rising, [0])
+        # Signal starts HIGH — this is a partial pulse (recording started
+        # mid-pulse). There is no real rising edge, only a falling edge.
+        # The orphaned falling edge is discarded by measure_pulse_widths.
+        np.testing.assert_array_equal(rising, [])
         np.testing.assert_array_equal(falling, [40])
 
     def test_ends_high(self):

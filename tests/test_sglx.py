@@ -84,10 +84,11 @@ def sglx_nidq(tmp_path_factory):
     ]
     meta_path.write_text("\n".join(meta_lines) + "\n")
 
+    # Pulse 0 is not detected (signal starts HIGH — no rising edge).
     start_ts = start_dt.timestamp()
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
-        for i in range(duration_s)
+        for i in range(1, duration_s)
     ]
 
     return {

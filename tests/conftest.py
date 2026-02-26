@@ -169,10 +169,12 @@ def generate_test_dat():
     data.tofile(path)
 
     # -- Expected (source, reference) pairs ------------------------------------
+    # Pulse 0 is not detected: the signal starts HIGH (mid-pulse), so there
+    # is no rising edge at sample 0.  The orphaned falling edge is discarded.
     start_ts = start_dt.timestamp()
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
-        for i in range(duration_s)
+        for i in range(1, duration_s)
     ]
 
     return {
@@ -262,9 +264,12 @@ def generate_test_dat_missing_pulses():
     path = os.path.join(temp_dir, "test_irig_missing.dat")
     _write_dat(irig, sample_rate, n_samples, n_channels, path)
 
-    # Expected: all pulses except the deleted ones
+    # Expected: all pulses except the deleted ones.
+    # Pulse 0 is also lost (signal starts HIGH — no rising edge).
     start_ts = start_dt.timestamp()
-    surviving_indices = [i for i in range(duration_s) if i not in deleted_indices]
+    surviving_indices = [
+        i for i in range(1, duration_s) if i not in deleted_indices
+    ]
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
         for i in surviving_indices
@@ -325,11 +330,12 @@ def generate_test_dat_extra_pulses():
     path = os.path.join(temp_dir, "test_irig_extra.dat")
     _write_dat(irig, sample_rate, n_samples, n_channels, path)
 
-    # Expected: same as clean signal (extras should be removed)
+    # Expected: same as clean signal (extras should be removed).
+    # Pulse 0 is lost (signal starts HIGH — no rising edge).
     start_ts = start_dt.timestamp()
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
-        for i in range(duration_s)
+        for i in range(1, duration_s)
     ]
 
     return {
@@ -402,13 +408,14 @@ def generate_test_dat_concatenated():
     data[:, 2] = np.clip(irig, -32768, 32767).astype(np.int16)
     data.tofile(path)
 
-    # Expected pairs: seg1 pulses then seg2 pulses
-    # Seg2 onsets are shifted by (seg1_duration + dead_zone_s) * sample_rate
+    # Expected pairs: seg1 pulses then seg2 pulses.
+    # Seg1 pulse 0 is lost (signal starts HIGH — no rising edge).
+    # Seg2 pulse 0 IS detected (preceded by LOW dead zone → real rising edge).
     seg1_ts = seg1_start.timestamp()
     seg2_ts = seg2_start.timestamp()
     seg2_sample_offset = (seg1_duration + dead_zone_s) * sample_rate
     expected_pairs = []
-    for i in range(seg1_duration):
+    for i in range(1, seg1_duration):
         expected_pairs.append((float(i * sample_rate), seg1_ts + float(i)))
     for i in range(seg2_duration):
         expected_pairs.append(
@@ -423,6 +430,6 @@ def generate_test_dat_concatenated():
         "irig_channel": 2,
         "seg1_duration": seg1_duration,
         "seg2_duration": seg2_duration,
-        "total_pulses": seg1_duration + seg2_duration,
+        "total_pulses": (seg1_duration - 1) + seg2_duration,
         "expected_pairs": expected_pairs,
     }

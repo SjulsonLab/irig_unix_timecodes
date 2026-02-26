@@ -59,9 +59,10 @@ def detect_edges(signal, threshold):
     rising_edges = np.where(diff == 1)[0] + 1
     falling_edges = np.where(diff == -1)[0] + 1
 
-    # If the signal starts HIGH, sample 0 is the onset of a pulse
-    if len(binary) > 0 and binary[0] == 1:
-        rising_edges = np.concatenate([[0], rising_edges])
+    # If the signal starts HIGH we are mid-pulse — there is no real rising
+    # edge.  The orphaned falling edge is silently discarded downstream by
+    # measure_pulse_widths, which only pairs rising edges with subsequent
+    # falling edges.
 
     return rising_edges, falling_edges
 
