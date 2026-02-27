@@ -229,8 +229,9 @@ neurokairos/
 ├── tests/
 ├── docs/
 │   ├── irig-h-standard.md
-│   ├── system_architecture.jpg
-│   └── irig_h_frame_structure.jpg
+│   ├── neurokairos_irig_h_frame.png
+│   ├── generate_irig_h_figure.py
+│   └── system_architecture.jpg
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md
