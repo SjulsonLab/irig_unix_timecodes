@@ -1,6 +1,9 @@
 #!/bin/bash
 
-# THIS ONLY DE-SETS UP THE IRIG SENDING SERVICE! Chrony config needs to be done seperately
+# Uninstall the IRIG sender service. Chrony config needs to be done separately.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
 # Stop the service
 sudo systemctl stop irig-sender.service
@@ -21,4 +24,4 @@ sudo rm -rf /var/log/irig-sender
 sudo rm -f /usr/local/bin/irig_sender
 
 # Remove compiled binary from local directory
-rm -f irig_sender
+make -C "$REPO_DIR/sender" clean

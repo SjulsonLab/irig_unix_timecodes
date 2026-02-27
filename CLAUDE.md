@@ -12,52 +12,73 @@ IRIG-H encodes UTC time as pulse-width modulated TTL signals: 60 bits/frame at 1
 
 ```bash
 # Compile the C sender (runs on Raspberry Pi, requires root for /dev/mem)
-gcc -o irig_sender irig_sender.c -lpthread -lm
+cd raspberry_pi/sender && make
 
-# Install as systemd service
-./setup.sh
+# Install as systemd service (default pins)
+./raspberry_pi/scripts/install.sh
+
+# Install with custom pins
+./raspberry_pi/scripts/install.sh -p 17 -n 27
+
+# Install with custom LED warning threshold
+./raspberry_pi/scripts/install.sh -p 17 -w 2.0
 
 # Uninstall systemd service
-./desetup.sh
+./raspberry_pi/scripts/uninstall.sh
 
-# Python dependencies
-pip install numpy pandas
-```
+# Run with default pins (BCM GPIO 11, inverted disabled)
+./raspberry_pi/sender/irig_sender
 
-## Key Usage
+# Run with custom pins
+./raspberry_pi/sender/irig_sender -p 17 -n 27
 
-```bash
-# Extract IRIG timecodes from a DAT recording file
-python extract_from_dat.py recording.dat -o output.npz
+# Run with custom LED warning threshold (blink when root dispersion > 2ms)
+./raspberry_pi/sender/irig_sender -w 2.0
 
-# extract_from_dat.py options: -t/--threshold (default 2500), -c/--channel (default 32),
-# --total-channels (default 40), --chunk-size (default 2500000)
+# Install Python package (editable/development mode)
+pip install -e ".[test]"
+
+# Run tests
+pytest tests/ -v
 ```
 
 ## Architecture
 
 Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on any machine).
 
-### Generation
-- `irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Outputs on GPIO 17 (normal) and GPIO 27 (inverted). Runs as systemd service at Nice -20.
-- `irig_h_gpio.py:IrigHSender` — Python sender for testing only (uses pigpio daemon).
+### Generation (C sender)
+- `raspberry_pi/sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Polls chrony every ~60 seconds and encodes sync status (stratum, root dispersion) in unused IRIG-H frame bits 43-44 and 46-48. Controls the RPi ACT LED to indicate sync quality. Runs as systemd service at Nice -20.
 
-### Core Library
-- `irig_h_gpio.py` — Shared encoding/decoding library. Contains BCD encode/decode, pulse classification (`identify_pulse_length`), frame detection (`decode_irig_bits`), and POSIX timestamp conversion (`irig_h_to_posix`). Both the C sender and Python extraction tools implement the same IRIG-H frame structure.
+### Chrony Integration
+- `raspberry_pi/scripts/install_chrony_server.sh` — Installs chrony + gpsd on the RPi with GPS. Configures PPS-disciplined stratum 1 NTP server.
+- `raspberry_pi/scripts/install_chrony_client.sh` — Installs chrony as NTP client (no GPS). Supports custom server (`--server`).
+- `raspberry_pi/scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
 
-### Decoding/Extraction
-- `extract_from_dat.py` — Main CLI tool. `IRIGExtractor` class reads binary DAT files in chunks, detects edges, classifies pulses, decodes frames, detects discontinuities, and outputs to compressed NPZ.
-- `extract_from_camera_events.py` — Processes camera event CSVs looking for TimeP/TimeN pin events.
-- `readSGLX.py` — SpikeGLX binary/metadata file reader (supports IMEC, NIDQ, OBX data types). Used upstream to extract IRIG channels from SpikeGLX recordings.
+### Core Python Library (`neurokairos/`)
+- `ttl.py` — Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths`. NumPy only, no dependencies on other modules.
+- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional interpolation (linear extrapolation up to 1.5 s beyond boundaries; warns and clamps beyond that), save/load to NPZ, JSON-serializable metadata.
+- `irig.py` — Complete IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding (complete + partial), robust handling of missing/extra pulses and concatenated files, `build_clock_table` orchestrator, plus top-level entry points `decode_dat_irig` and `decode_intervals_irig`.
+- `sglx.py` — SpikeGLX `.meta` reader + `decode_sglx_irig` entry point.
+- `video.py` — Video LED extraction + `decode_video_irig` entry point. OpenCV (`cv2`) is an optional dependency.
 
-### Analysis
-- `bin_analysis.py` — Analyzes bit-packed binary IRIG data with generator-based unpacking.
-- `npz_analysis.py` — Analyzes NPZ output for sampling rate, IRIG-vs-PPS error/latency, and systematic offset detection.
+### Public API (`neurokairos/__init__.py`)
+- `ClockTable` — sparse time mapping
+- `bcd_encode`, `bcd_decode` — BCD encoding/decoding
+- `decode_dat_irig` — decode from interleaved int16 `.dat` files
+- `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
+- `decode_video_irig` — decode from video files with IRIG LED
+- `decode_intervals_irig` — decode from pre-extracted pulse intervals
+- BCD weight constants: `SECONDS_WEIGHTS`, `MINUTES_WEIGHTS`, `HOURS_WEIGHTS`, `DAY_OF_YEAR_WEIGHTS`, `DECISECONDS_WEIGHTS`, `YEARS_WEIGHTS`
 
-## Key Constants (irig_h_gpio.py)
+## Key Constants (neurokairos/irig.py)
 
-Pulse classification thresholds are defined relative to `SENDING_BIT_LENGTH` (1 second) and `DECODE_BIT_PERIOD` (1/30000s). When modifying thresholds, both `P_THRESHOLD`, `ONE_THRESHOLD`, and `ZERO_THRESHOLD` must stay consistent with the 0.2/0.5/0.8 pulse width ratios.
+Pulse-width fractions of 1 second: `PULSE_FRAC_ZERO` (0.2), `PULSE_FRAC_ONE` (0.5), `PULSE_FRAC_MARKER` (0.8). Classification boundaries are midpoints: 0.35 (0/1), 0.65 (1/marker). Min valid: 0.1, max: 0.95.
 
-## Data Formats
+## Sync Status Encoding (NeuroKairos Extension)
 
-NPZ output contains structured arrays with fields: `on_sample` (uint64), `off_sample` (uint64), `pulse_type` (int8: 0/1/2 for zero/one/P, -1 for error), `unix_time` (float64), `frame_id` (int32).
+The C sender polls chrony every ~60 seconds and encodes sync quality in previously unused IRIG-H frame bits. Bits 43-44 carry a 2-bit stratum code (1->0, 2->1, 3->2, >=4->3). Bits 46-48 carry a 3-bit root dispersion bucket on a doubling scale from <0.25ms (0) to >=16ms (7). Bits 42 and 45 remain zero (reserved). Old recordings with all-zero status bits are ambiguous with stratum 1 / best dispersion. See `docs/irig-h-standard.md` for the full encoding table.
+
+## Known Bug History
+
+- **Day-of-year off-by-one (C sender, fixed in `6def02b`):** C's `tm_yday` is 0-indexed (0-365) but IRIG-H expects 1-indexed (1-366). The original C sender omitted the `+1`, causing every transmitted day to be one too low. Python was never affected (`timetuple().tm_yday` is already 1-indexed). Old branches `less-cpu` and `charlie-irig` still have the unfixed code.
+- **Frames must start on minute boundaries:** The C sender waits for the next :00 second before transmitting its first frame. Each frame is 60 bits (60 seconds), so subsequent frames naturally align to minute boundaries. The BCD seconds field is always 0.

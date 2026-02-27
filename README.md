@@ -1,382 +1,221 @@
-# NeuroKairos: GPS-Disciplined IRIG-H Timecode System
+# (still in progress; not ready for use) NeuroKairos: GPS-based synchronization for neuroscience experiments
 
-A high-precision timing synchronization system for neuroscience experiments using GPS satellite atomic clock references and IRIG-H timecode standards. The system enables synchronization of multiple data streams (electrophysiology recordings, camera frames, behavioral data) to UTC time by encoding timestamps as pulse-width modulated TTL signals.
+A universal, open-source timing synchronization solution for neuroscience experiments. NeuroKairos continuously obtains the earth's Coordinated Universal Time (UTC) from the atomic clocks inside GPS satellites and encodes it a sequence of TTL pulses known as an IRIG-H timecode. Any instrument that can record this timecode through TTL pulses or a blinking LED can therefore continuously timestamp its simultaneously-recorded data with objective UTC time. This enables virtually any device to synchronize to UTC time, which provides a common reference for aligning different data streams with each other.
 
-## Overview
+![NeuroKairos System Architecture](docs/system_architecture.jpg)
 
-NeuroKairos implements a GPS-disciplined IRIG-H timecode generation and decoding system on Raspberry Pi 4B. It provides dual-mode timing distribution through both Network Time Protocol (NTP) for network-connected devices and hardware IRIG-H signals for direct instrumentation. The system continuously generates timecodes that encode current UTC time as pulse-width modulated signals on GPIO pins, which can be recorded alongside experimental data for post-hoc synchronization.
+*NeuroKairos system architecture: a GPS-disciplined Raspberry Pi serves as both a stratum-1 NTP server for network-connected devices and an IRIG-H timecode generator for direct hardware timing signals.*
+
+## The Problem
+
+Modern neuroscience experiments require precise synchronization of multiple data streams — electrophysiology, cameras, behavioral apparatus — but each device runs on its own internal clock. These clocks drift apart during experiments, and timing errors as small as one millisecond can reduce neural decoding accuracy from perfect performance to random chance. No universal solution exists: laboratories are forced to build unreliable custom systems or purchase expensive commercial timing hardware with restrictive compatibility requirements.
+
+## The Solution
+
+NeuroKairos combines two mature technologies — GPS atomic clock disciplining and IRIG timecodes — to create a universal synchronization system on consumer hardware. The system works with **any recording device** capable of sampling voltage pulses or imaging LEDs, requiring no modifications to existing equipment.
+
+**Dual-mode timing distribution:**
+1. **Network Time Protocol (NTP)**: The GPS-disciplined Raspberry Pi serves as a stratum-1 NTP server for all network-connected devices
+2. **IRIG-H hardware signals**: GPIO pins output pulse-width modulated timecodes that can be recorded directly alongside experimental data
+
+Validation against 30,000 Hz electrophysiology demonstrated an average timing accuracy of **33 microseconds** with 99.44% of events at sub-sample precision and zero decoding errors over 25 hours of continuous recording.
 
 ## What is IRIG-H?
 
-IRIG-H is a timecode format from the Inter-Range Instrumentation Group (IRIG) standards, originally developed in the 1950s for military missile testing and aerospace telemetry. The format transmits timing information as pulse-width modulated signals:
+IRIG-H is one of the simplest formats in the IRIG timecode family (IRIG Standard 200), transmitting one pulse per second with 60 pulses per frame. Each pulse encodes a binary value through its width: 0.2s for binary 0, 0.5s for binary 1, and 0.8s for position markers. Frames encode minutes, hours, day of year, and year in Binary Coded Decimal (BCD) format.
 
-- **Frame structure**: 60 bits per frame, transmitted at 1 Hz (1 second per bit)
-- **Pulse encoding**: Three pulse widths encode different values:
-  - 0.2 seconds = binary 0
-  - 0.5 seconds = binary 1
-  - 0.8 seconds = position marker (P)
-- **Time encoding**: Binary Coded Decimal (BCD) format encoding seconds, minutes, hours, day of year, and year
-- **Position markers**: Located at bits 0, 9, 19, 29, 39, 49, 59 for frame synchronization
-
-Each frame encodes:
-- Seconds (bits 1-8)
-- Minutes (bits 10-17)
-- Hours (bits 20-26)
-- Day of year (bits 30-41)
-- Year, 2-digit (bits 50-58)
-- Deciseconds (bits 45-48, always 0 in this implementation)
-
-## System Architecture
-
-### GPS-Disciplined Clock
-
-The system uses a GPS receiver with Pulse Per Second (PPS) output to discipline the Raspberry Pi's system clock via chrony (Network Time Protocol daemon). The GPS receiver provides a stratum-0 timing reference directly phase-locked to GPS satellite atomic clocks, enabling the Raspberry Pi to operate as a stratum-1 NTP server.
-
-### Dual-Mode Timing Distribution
-
-1. **Network Time Protocol (NTP)**: The GPS-disciplined Raspberry Pi serves as an NTP server for network-connected devices (computers, data acquisition systems)
-2. **IRIG-H Hardware Signals**: GPIO pins output IRIG-H timecodes that can be recorded by any system capable of sampling voltage pulses or imaging LEDs
-
-### Signal Outputs
-
-- **GPIO 17**: IRIG-H timecode output (normal polarity)
-- **GPIO 27**: IRIG-H timecode output (inverted polarity)
-
-## Key Components
-
-### 1. IRIG Sender (C Implementation)
-
-**File**: `irig_sender.c`
-
-Low-latency C program that generates IRIG-H timecodes via direct GPIO register access:
-
-- Uses `/dev/mem` for direct hardware register access (bypasses kernel overhead)
-- Nanosecond-level timing control using `clock_gettime(CLOCK_REALTIME)`
-- Hybrid sleep/busy-wait approach for precision timing
-- 20 microsecond offset compensation for GPIO pin toggle latency
-- Pre-calculates frame timing 200ms before transmission to minimize jitter
-- Runs as systemd service with Nice -20 priority for scheduler preference
-- Outputs on GPIO 17 (normal) and GPIO 27 (inverted)
-
-**Timing precision features**:
-- Sleeps until ~1ms before second boundary
-- Enters busy-wait loop polling system clock at maximum frequency
-- Detects exact moment of second transition
-- Immediately sets GPIO HIGH to generate pulse rising edge
-
-### 2. IRIG Decoder Library (Python)
-
-**File**: `irig_h_gpio.py`
-
-Complete IRIG-H encoding and decoding library:
-
-- BCD encoding/decoding utilities
-- Pulse length classification (0.2s, 0.5s, 0.8s)
-- Frame detection and synchronization
-- Converts IRIG frames to POSIX timestamps (Unix time)
-- Python-based sender class (`IrigHSender`) using pigpio for testing
-
-### 3. Data Extraction Tools
-
-#### extract_from_dat.py
-
-Extracts IRIG pulses from binary DAT files (electrophysiology recordings):
-
-- Command-line interface: `extract_from_dat.py [input_file] [output_file]`
-- Configurable parameters: signal threshold, channel selection, sampling rate
-- Processes data in chunks for memory efficiency
-- Edge detection (rising/falling) to identify pulse boundaries
-- Pulse classification and frame decoding
-- Sampling rate estimation
-- Discontinuity detection (gaps, time jumps, dropped frames)
-- Outputs to compressed NPZ format with structured arrays
-
-#### extract_from_camera_events.py
-
-Processes camera event CSV files:
-
-- Extracts IRIG timecode pulse information from event timestamps
-- Identifies TimeP/TimeN pin events (GPIO 17/27)
-- Outputs to NPZ format for analysis
-
-### 4. Analysis Scripts
-
-#### bin_analysis.py
-
-Analyzes bit-packed binary IRIG data:
-
-- Memory-efficient generator-based unpacking
-- Error detection by comparing IRIG to PPS (pulse-per-second) signals
-- Pulse length analysis
-- CSV export of decoded timecodes
-
-#### npz_analysis.py
-
-Analyzes NPZ-formatted IRIG data:
-
-- Sampling rate calculation
-- Error/latency analysis between IRIG and PPS
-- Systematic offset detection and correction
-- Decode validation
-
-### 5. SpikeGLX Integration
-
-**File**: `readSGLX.py`
-
-Reads SpikeGLX binary and metadata files:
-
-- Supports IMEC, NIDQ, and OBX data types
-- Channel extraction and gain correction
-- Digital line extraction for IRIG signals
-- Memory-mapped file access for large datasets
+For detailed specifications including the complete bit map and encoding tables, see the [IRIG-H Standard Reference](docs/irig-h-standard.md).
 
 ## Hardware Requirements
 
-- **Raspberry Pi 4 Model B** (required for pigpio compatibility with Python tools)
-- **Waveshare NEO-M8T GNSS Timing Hat** or compatible GPS timing receiver
-  - u-blox NEO-M8T GNSS receiver chip with dedicated timing mode
-  - Precision PPS output phase-locked to GPS atomic clocks
+- **Raspberry Pi 4 Model B**
+- **Waveshare NEO-M8T GNSS Timing Hat** or compatible GPS timing receiver with PPS output
 - **GPS antenna** with direct sky visibility
-- **GPIO connections**: Pins 17 and 27 for IRIG output
-
-## Software Dependencies
-
-### C Sender
-- pthread library
-- math library (`-lm`)
-- `/dev/mem` access (requires root privileges)
-
-### Python Tools
-- numpy
-- pandas
-- pigpio (for Python sender only, not required for C sender)
-
-### System Services
-- chrony (NTP daemon for GPS disciplining)
-- systemd (service management)
+- **GPIO connections**: Default BCM GPIO 11 for IRIG output (configurable via `-p`/`-n` flags)
 
 ## Installation
 
-### 1. Configure GPS Clock Disciplining
+### Python Decoder Library
 
-Install and configure chrony to use the GPS receiver as timing source:
-
-```bash
-sudo apt install chrony
-```
-
-Edit `/etc/chrony/chrony.conf` to add GPS as stratum-0 source with appropriate refid and trust parameters.
-
-### 2. Compile C Sender
+The `neurokairos` Python package decodes IRIG-H timecodes from recorded data. It runs on any machine — no Raspberry Pi required.
 
 ```bash
-gcc -o irig_sender irig_sender.c -lpthread -lm
+pip install .
+
+# Or for development (editable install with test dependencies)
+pip install -e ".[test]"
 ```
 
-### 3. Install as System Service
+### Raspberry Pi Setup
+
+The following steps run on the Raspberry Pi that will generate IRIG-H signals.
+
+#### 1. Configure GPS Clock Disciplining
 
 ```bash
-# Copy binary to system location
-sudo cp irig_sender /usr/local/bin/
+# Install chrony + gpsd with GPS PPS disciplining (stratum 1 server)
+sudo ./raspberry_pi/scripts/install_chrony_server.sh
 
-# Copy systemd service file
-sudo cp systemctl/irig-sender.service /etc/systemd/system/
-
-# Enable and start service
-sudo systemctl enable irig-sender.service
-sudo systemctl start irig-sender.service
+# Or install as NTP client only (no GPS)
+sudo ./raspberry_pi/scripts/install_chrony_client.sh --server <your-ntp-server>
 ```
 
-The service runs with Nice -20 priority for low-latency scheduling.
-
-### 4. Install Python Dependencies
+#### 2. Compile C Sender
 
 ```bash
-pip install numpy pandas
+cd raspberry_pi/sender
+make
 ```
 
-For Python-based sender (testing only):
+#### 3. Install as System Service
+
 ```bash
-sudo apt install pigpio
-sudo systemctl enable pigpiod
-sudo systemctl start pigpiod
+# Install with default pins (BCM GPIO 11, inverted disabled)
+./raspberry_pi/scripts/install.sh
+
+# Install with custom pins
+./raspberry_pi/scripts/install.sh -p 17 -n 27
+
+# Install with custom LED warning threshold (ms)
+./raspberry_pi/scripts/install.sh -p 17 -w 2.0
 ```
+
+The install script compiles the sender, copies it to `/usr/local/bin/`, generates the systemd service file with your pin configuration baked in, and starts the service. To change pins later, just re-run `install.sh` with the new flags — it will restart the service automatically.
+
+The service runs with Nice -20 priority and SCHED_FIFO real-time scheduling for low-latency timing.
 
 ## Usage
 
-### Generation Workflow
+### Generation (Raspberry Pi)
 
-1. **Clock Synchronization**: System clock is synchronized to GPS via chrony
-2. **Continuous Generation**: `irig_sender.c` runs as systemd service, continuously generating IRIG-H frames
-3. **Signal Output**: GPIO 17/27 output pulse-width modulated signals encoding UTC time
-4. **Data Recording**: Recording equipment samples GPIO signals alongside experimental data
+1. **Clock synchronization**: System clock is synchronized to GPS via chrony
+2. **Continuous generation**: `irig_sender` runs as a systemd service, generating IRIG-H frames
+3. **Signal output**: GPIO pin(s) output pulse-width modulated signals encoding UTC time
+4. **Data recording**: Recording equipment samples GPIO signals alongside experimental data
 
-### Decoding Workflow
+### Decoding (Python)
 
-1. **Extract IRIG Channel**: Use `extract_from_dat.py` for electrophysiology or `extract_from_camera_events.py` for camera data
-2. **Pulse Detection**: Pulses are detected, classified (0/1/P), and grouped into 60-bit frames
-3. **Frame Decoding**: BCD fields are decoded to extract time components (year, day, hour, minute, second)
-4. **Timestamp Conversion**: Decoded frames are converted to POSIX timestamps (seconds since Unix epoch)
-5. **Analysis**: Use `npz_analysis.py` or `bin_analysis.py` to verify accuracy and detect errors
+```python
+import neurokairos
 
-### Example: Extract from DAT File
+# Decode from a SpikeGLX recording
+clock_table = neurokairos.decode_sglx_irig("recording.bin")
 
-```bash
-python extract_from_dat.py recording.dat output.npz
+# Decode from an interleaved int16 .dat file
+clock_table = neurokairos.decode_dat_irig("recording.dat", sample_rate=30000)
+
+# Decode from video with IRIG LED
+clock_table = neurokairos.decode_video_irig("recording.mp4", roi=(x, y, w, h))
+
+# Decode from pre-extracted pulse intervals
+clock_table = neurokairos.decode_intervals_irig(intervals, start_time)
+
+# Convert sample indices to UTC timestamps
+utc_times = clock_table.source_to_reference(sample_indices)
 ```
 
-Optional parameters:
-- `--threshold`: Signal threshold for pulse detection
-- `--channel`: DAT file channel containing IRIG signal
-- `--sample-rate`: Override sampling rate (otherwise estimated)
+The returned `ClockTable` provides bidirectional interpolation between source samples and UTC time, with save/load to NPZ and JSON-serializable metadata.
 
-## IRIG-H Frame Structure
+## Python Package
 
-Complete 60-bit frame specification:
+### Modules
 
-| Bit Position | BCD Weight | Time Information | Bit Position | BCD Weight | Time Information |
-|--------------|-----------|------------------|--------------|-----------|------------------|
-| 00 | P | Reference Marker | 30 | 1 | Day of Year (1-366) |
-| 01 | 1 | Seconds (00-59) | 31 | 2 | Day of Year |
-| 02 | 2 | Seconds | 32 | 4 | Day of Year |
-| 03 | 4 | Seconds | 33 | 8 | Day of Year |
-| 04 | 8 | Seconds | 34 | 0 | Reserved |
-| 05 | 0 | Unused | 35 | 10 | Day of Year |
-| 06 | 10 | Seconds | 36 | 20 | Day of Year |
-| 07 | 20 | Seconds | 37 | 40 | Day of Year |
-| 08 | 40 | Seconds | 38 | 80 | Day of Year |
-| 09 | P | Position Identifier | 39 | P | Position Identifier |
-| 10 | 1 | Minutes (00-59) | 40 | 100 | Day of Year |
-| 11 | 2 | Minutes | 41 | 200 | Day of Year |
-| 12 | 4 | Minutes | 42 | 0 | Reserved |
-| 13 | 8 | Minutes | 43 | 0 | Reserved |
-| 14 | 0 | Reserved | 44 | 0 | Reserved |
-| 15 | 10 | Minutes | 45 | 0.1 | Tenths Seconds (0.0-0.9) |
-| 16 | 20 | Minutes | 46 | 0.2 | Tenths Seconds |
-| 17 | 40 | Minutes | 47 | 0.4 | Tenths Seconds |
-| 18 | 0 | Reserved | 48 | 0.8 | Tenths Seconds |
-| 19 | P | Position Identifier | 49 | P | Position Identifier |
-| 20 | 1 | Hours (0-23) | 50 | 1 | Year (00-99) |
-| 21 | 2 | Hours | 51 | 2 | Year |
-| 22 | 4 | Hours | 52 | 4 | Year |
-| 23 | 8 | Hours | 53 | 8 | Year |
-| 24 | 0 | Reserved | 54 | 0 | Reserved |
-| 25 | 10 | Hours | 55 | 10 | Year |
-| 26 | 20 | Hours | 56 | 20 | Year |
-| 27 | 0 | Unused | 57 | 40 | Year |
-| 28 | 0 | Unused | 58 | 80 | Year |
-| 29 | P | Position Identifier | 59 | P | Position Identifier |
+| Module | Description |
+|--------|-------------|
+| `irig.py` | IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding, `build_clock_table` orchestrator |
+| `clock_table.py` | `ClockTable` dataclass: sparse time mapping with bidirectional interpolation, NPZ save/load |
+| `ttl.py` | Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths` |
+| `sglx.py` | SpikeGLX `.meta` reader + `decode_sglx_irig` entry point |
+| `video.py` | Video LED extraction + `decode_video_irig` entry point (requires OpenCV) |
 
-**Note**: Deciseconds (bits 45-48) are always 0 in this implementation. Position markers (P) provide frame synchronization.
+### Public API
 
-## Data Formats
+- `ClockTable` — sparse time mapping (source <-> reference)
+- `bcd_encode`, `bcd_decode` — BCD encoding/decoding
+- `decode_dat_irig` — decode from interleaved int16 `.dat` files
+- `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
+- `decode_video_irig` — decode from video files with IRIG LED
+- `decode_intervals_irig` — decode from pre-extracted pulse intervals
 
-### NPZ Output Format
+## Performance
 
-Structured NumPy arrays with fields:
-- `on_sample`: Sample index of pulse rising edge
-- `off_sample`: Sample index of pulse falling edge
-- `pulse_type`: Classified pulse type (0, 1, or P)
-- `unix_time`: Decoded POSIX timestamp
-- `frame_id`: Frame number
+Validated against 30,000 Hz electrophysiology recording over 25 hours:
 
-### CSV Output Format
-
-Decoded timestamps with columns:
-- `frame_number`: Sequential frame identifier
-- `unix_timestamp`: Seconds since Unix epoch (Jan 1, 1970)
-- `datetime`: Human-readable date/time string
-- `samples_since_last`: Sample count between frames
-
-### Sender Log Files
-
-Format: `irig_output_timestamps_[datetime].csv`
-
-Columns:
-- `encoded_time`: The time value encoded in the frame
-- `sending_start`: System timestamp when transmission began
-
-## Technical Implementation Details
-
-### Timing Precision Mechanisms
-
-1. **Direct Hardware Access**: `/dev/mem` access bypasses kernel GPIO drivers for faster pin toggling
-2. **Hybrid Sleep/Busy-Wait**: Sleeps until ~1ms before target time, then busy-waits for precision
-3. **Offset Compensation**: 20 microsecond `OFFSET_NS` parameter compensates for GPIO toggle latency
-4. **Frame Pre-calculation**: Timing calculations performed 200ms before frame transmission
-5. **Configurable Busy-Wait**: `BUSY_WAIT_SLEEP_NS` parameter (default: 0) for maximum precision
-
-### BCD Encoding Scheme
-
-Binary Coded Decimal uses weighted bit positions to encode decimal digits:
-
-**Example**: 45 seconds
-- Ones place: 5 = 1 + 4 → bits with weights 1 and 4 are HIGH
-- Tens place: 4 = 4 → bit with weight 40 is HIGH
-- Result: Bits 1, 3, and 7 are HIGH in the seconds field
-
-### Pulse Classification
-
-During decoding, pulse widths are classified by thresholds:
-- **Short pulse** (< 0.35 × bit_length): Binary 0
-- **Medium pulse** (0.35-0.65 × bit_length): Binary 1
-- **Long pulse** (> 0.65 × bit_length): Position marker P
-
-## Use Cases
-
-1. **Electrophysiology**: Synchronize neural recordings (SpikeGLX, Intan, etc.) with behavioral events
-2. **Multi-camera systems**: Align multiple camera streams via GPIO-triggered events
-3. **Cross-system synchronization**: UTC timestamps enable alignment across separate recording systems
-4. **Long-duration recordings**: Continuous timecode stream maintains sync over hours/days
-5. **Mobile recordings**: Post-hoc timing recovery through embedded timecodes
+| Metric | Value |
+|--------|-------|
+| Average timing delay (IRIG vs PPS) | 33 microseconds |
+| Events at primary peak (33 us) | 99.44% |
+| Events at secondary peak (67 us) | 0.56% |
+| Rare excursions (0.7-4 ms) | 0.005% |
+| Pulse duration standard deviation | < 1 ms |
+| Decoding errors | 0 |
 
 ## System Service Management
 
-### Check Service Status
 ```bash
+# Check status
 sudo systemctl status irig-sender.service
-```
 
-### View Logs
-```bash
+# View logs
 sudo journalctl -u irig-sender.service -f
-```
 
-### Stop/Start Service
-```bash
+# Stop/start
 sudo systemctl stop irig-sender.service
 sudo systemctl start irig-sender.service
-```
 
-### Restart After Configuration Changes
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart irig-sender.service
+# Uninstall
+./raspberry_pi/scripts/uninstall.sh
 ```
 
 ## File Structure
 
 ```
-irig_unix_timecodes/
-├── irig_sender.c              # C implementation of IRIG-H generator
-├── irig_h_gpio.py             # Python IRIG-H encoder/decoder library
-├── extract_from_dat.py        # DAT file IRIG extraction
-├── extract_from_camera_events.py  # Camera event IRIG extraction
-├── bin_analysis.py            # Binary IRIG data analysis
-├── npz_analysis.py            # NPZ format IRIG data analysis
-├── readSGLX.py                # SpikeGLX file reader
-├── systemctl/
-│   └── irig-sender.service    # Systemd service file
-└── README.md
+neurokairos/
+├── raspberry_pi/                        # Raspberry Pi (generation)
+│   ├── sender/
+│   │   ├── irig_sender.c               # C sender with direct GPIO access
+│   │   └── Makefile
+│   ├── systemd/
+│   │   └── irig-sender.service          # systemd service template
+│   ├── scripts/
+│   │   ├── install.sh                   # Install sender as systemd service
+│   │   ├── uninstall.sh                 # Remove sender service
+│   │   ├── install_chrony_server.sh     # GPS + chrony setup (stratum 1)
+│   │   ├── install_chrony_client.sh     # chrony NTP client setup
+│   │   └── test_chrony.sh              # chrony/gpsd diagnostics
+│   └── docs/
+│       └── timing-loop.md              # C sender timing loop documentation
+├── neurokairos/                         # Python package (decoding)
+│   ├── __init__.py
+│   ├── irig.py
+│   ├── clock_table.py
+│   ├── ttl.py
+│   ├── sglx.py
+│   └── video.py
+├── tests/
+├── docs/
+│   ├── irig-h-standard.md
+│   ├── system_architecture.jpg
+│   └── irig_h_frame_structure.jpg
+├── pyproject.toml
+├── README.md
+├── CLAUDE.md
+└── LICENSE
 ```
+
+## Citation
+
+If you use NeuroKairos in your research, please cite:
+
+> Kerr, C. (2025). NeuroKairos: A Universal GPS Satellite-Based Solution to Synchronization in Neuroscience Experiments.
 
 ## References
 
-- IRIG Standard 200-16, Range Commanders Council (2016)
-- IRIG timecode specifications: https://en.wikipedia.org/wiki/IRIG_timecode
-- Chrony documentation: https://chrony.tuxfamily.org/
-- GPS disciplined oscillators: https://www.nist.gov/pml/time-and-frequency-division/
+- Range Commanders Council, Telecommunications and Timing Group. (2016). *IRIG Serial Time Code Formats*. RCC Standard 200-16. White Sands Missile Range, New Mexico.
+- [IRIG timecode (Wikipedia)](https://en.wikipedia.org/wiki/IRIG_timecode)
+- [Chrony documentation](https://chrony.tuxfamily.org/)
+- [NIST Time and Frequency Division](https://www.nist.gov/pml/time-and-frequency-division/)
 
 ## License
 
-Open source implementation for neuroscience research applications.
+MIT License. See [LICENSE](LICENSE) for details.

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurokairos"
+version = "0.2.0"
+description = "GPS-disciplined IRIG-H timecode system for neuroscience data synchronization"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [
+    {name = "Luke Sjulson"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "numpy",
+]
+
+[tool.setuptools.packages.find]
+include = ["neurokairos*"]
+
+[project.optional-dependencies]
+video = ["opencv-python"]
+test = ["pytest"]
+
+[project.urls]
+Repository = "https://github.com/lukesjulson/irig_unix_timecodes"
