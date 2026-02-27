@@ -86,35 +86,59 @@ The service runs with Nice -20 priority and SCHED_FIFO real-time scheduling for 
 
 ## Usage
 
-### Generation (Raspberry Pi)
+### Encoder (Raspberry Pi)
 
 1. **Clock synchronization**: System clock is synchronized to GPS via chrony
-2. **Continuous generation**: `irig_sender` runs as a systemd service, generating IRIG-H frames
+2. **Continuous encoding**: `irig_sender` runs as a systemd service, generating IRIG-H frames
 3. **Signal output**: GPIO pin(s) output pulse-width modulated signals encoding UTC time
 4. **Data recording**: Recording equipment samples GPIO signals alongside experimental data
 
-### Decoding (Python)
+### Decoder (Python)
 
 ```python
 import neurokairos
 
 # Decode from a SpikeGLX recording
-clock_table = neurokairos.decode_sglx_irig("recording.bin")
+clock_table = neurokairos.decode_sglx_irig("recording.bin", irig_channel="sync")
 
 # Decode from an interleaved int16 .dat file
-clock_table = neurokairos.decode_dat_irig("recording.dat", sample_rate=30000)
+clock_table = neurokairos.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
 
 # Decode from video with IRIG LED
 clock_table = neurokairos.decode_video_irig("recording.mp4", roi=(x, y, w, h))
 
 # Decode from pre-extracted pulse intervals
-clock_table = neurokairos.decode_intervals_irig(intervals, start_time)
+clock_table = neurokairos.decode_intervals_irig(onsets, offsets=offsets)
 
-# Convert sample indices to UTC timestamps
-utc_times = clock_table.source_to_reference(sample_indices)
+# Decode from event logs (MedPC, CSV/TSV)
+decoder = neurokairos.IRIGDecoder.from_events("session.txt", format="medpc")
+clock_table = decoder.decode()
 ```
 
-The returned `ClockTable` provides bidirectional interpolation between source samples and UTC time, with save/load to NPZ and JSON-serializable metadata.
+#### Unified API: IRIGDecoder
+
+`IRIGDecoder` provides a single facade over all decoder functions:
+
+```python
+from neurokairos import IRIGDecoder
+
+decoder = IRIGDecoder.from_sglx("recording.bin", irig_channel="sync")
+clock_table = decoder.decode()
+```
+
+### Synchronizer (ClockTable)
+
+The returned `ClockTable` acts as a **synchronizer** — it provides bidirectional interpolation between source samples and UTC time, bridging independent clock domains. Any two streams decoded to UTC via their own ClockTables can be aligned to a common time axis.
+
+```python
+# Convert sample indices to UTC timestamps
+utc_times = clock_table.source_to_reference(sample_indices)
+
+# Convert UTC timestamps back to sample indices
+samples = clock_table.reference_to_source(utc_timestamps)
+```
+
+ClockTables support save/load to NPZ and carry JSON-serializable metadata (provenance, decoding quality, NTP sync status).
 
 ## Python Package
 
@@ -127,15 +151,22 @@ The returned `ClockTable` provides bidirectional interpolation between source sa
 | `ttl.py` | Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths` |
 | `sglx.py` | SpikeGLX `.meta` reader + `decode_sglx_irig` entry point |
 | `video.py` | Video LED extraction + `decode_video_irig` entry point (requires OpenCV) |
+| `events.py` | Event log parsing for MedPC and CSV/TSV files: IRIG pulse extraction, behavioral event conversion to UTC |
+| `decoder.py` | `IRIGDecoder` unified facade with `from_dat`, `from_sglx`, `from_video`, `from_intervals`, `from_events` classmethods |
 
 ### Public API
 
-- `ClockTable` — sparse time mapping (source <-> reference)
+- `IRIGDecoder` — unified decoder facade (`from_dat`, `from_sglx`, `from_video`, `from_intervals`, `from_events`)
+- `ClockTable` — sparse time mapping (source <-> reference), the synchronizer
 - `bcd_encode`, `bcd_decode` — BCD encoding/decoding
 - `decode_dat_irig` — decode from interleaved int16 `.dat` files
 - `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
 - `decode_video_irig` — decode from video files with IRIG LED
 - `decode_intervals_irig` — decode from pre-extracted pulse intervals
+- `parse_medpc_file` — parse MedPC data files
+- `parse_csv_events` — parse CSV/TSV event files
+- `extract_irig_pulses` — extract IRIG pulse onsets/offsets from event data
+- `convert_events_to_utc` — convert event timestamps to UTC via ClockTable
 
 ## Performance
 
@@ -171,7 +202,7 @@ sudo systemctl start irig-sender.service
 
 ```
 neurokairos/
-├── raspberry_pi/                        # Raspberry Pi (generation)
+├── raspberry_pi/                        # Encoder (Raspberry Pi)
 │   ├── sender/
 │   │   ├── irig_sender.c               # C sender with direct GPIO access
 │   │   └── Makefile
@@ -184,14 +215,17 @@ neurokairos/
 │   │   ├── install_chrony_client.sh     # chrony NTP client setup
 │   │   └── test_chrony.sh              # chrony/gpsd diagnostics
 │   └── docs/
+│       ├── setup-guide.md              # Complete RPi setup instructions
 │       └── timing-loop.md              # C sender timing loop documentation
-├── neurokairos/                         # Python package (decoding)
+├── neurokairos/                         # Decoder + Synchronizer (Python)
 │   ├── __init__.py
 │   ├── irig.py
 │   ├── clock_table.py
 │   ├── ttl.py
 │   ├── sglx.py
-│   └── video.py
+│   ├── video.py
+│   ├── events.py
+│   └── decoder.py
 ├── tests/
 ├── docs/
 │   ├── irig-h-standard.md

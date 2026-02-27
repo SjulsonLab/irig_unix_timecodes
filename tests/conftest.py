@@ -3,6 +3,9 @@
 Imports ``bcd_encode`` and weight constants from NeuroKairos to build
 authentic IRIG-H bit patterns.  The generated ``.dat`` file starts and
 ends mid-frame, matching real-world recordings.
+
+Also provides a synthetic SpikeGLX nidq recording for shared use across
+test_sglx.py and test_decoder.py.
 """
 
 import os
@@ -169,10 +172,12 @@ def generate_test_dat():
     data.tofile(path)
 
     # -- Expected (source, reference) pairs ------------------------------------
+    # Pulse 0 is not detected: the signal starts HIGH (mid-pulse), so there
+    # is no rising edge at sample 0.  The orphaned falling edge is discarded.
     start_ts = start_dt.timestamp()
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
-        for i in range(duration_s)
+        for i in range(1, duration_s)
     ]
 
     return {
@@ -262,9 +267,12 @@ def generate_test_dat_missing_pulses():
     path = os.path.join(temp_dir, "test_irig_missing.dat")
     _write_dat(irig, sample_rate, n_samples, n_channels, path)
 
-    # Expected: all pulses except the deleted ones
+    # Expected: all pulses except the deleted ones.
+    # Pulse 0 is also lost (signal starts HIGH — no rising edge).
     start_ts = start_dt.timestamp()
-    surviving_indices = [i for i in range(duration_s) if i not in deleted_indices]
+    surviving_indices = [
+        i for i in range(1, duration_s) if i not in deleted_indices
+    ]
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
         for i in surviving_indices
@@ -325,11 +333,12 @@ def generate_test_dat_extra_pulses():
     path = os.path.join(temp_dir, "test_irig_extra.dat")
     _write_dat(irig, sample_rate, n_samples, n_channels, path)
 
-    # Expected: same as clean signal (extras should be removed)
+    # Expected: same as clean signal (extras should be removed).
+    # Pulse 0 is lost (signal starts HIGH — no rising edge).
     start_ts = start_dt.timestamp()
     expected_pairs = [
         (float(i * sample_rate), start_ts + float(i))
-        for i in range(duration_s)
+        for i in range(1, duration_s)
     ]
 
     return {
@@ -402,13 +411,14 @@ def generate_test_dat_concatenated():
     data[:, 2] = np.clip(irig, -32768, 32767).astype(np.int16)
     data.tofile(path)
 
-    # Expected pairs: seg1 pulses then seg2 pulses
-    # Seg2 onsets are shifted by (seg1_duration + dead_zone_s) * sample_rate
+    # Expected pairs: seg1 pulses then seg2 pulses.
+    # Seg1 pulse 0 is lost (signal starts HIGH — no rising edge).
+    # Seg2 pulse 0 IS detected (preceded by LOW dead zone → real rising edge).
     seg1_ts = seg1_start.timestamp()
     seg2_ts = seg2_start.timestamp()
     seg2_sample_offset = (seg1_duration + dead_zone_s) * sample_rate
     expected_pairs = []
-    for i in range(seg1_duration):
+    for i in range(1, seg1_duration):
         expected_pairs.append((float(i * sample_rate), seg1_ts + float(i)))
     for i in range(seg2_duration):
         expected_pairs.append(
@@ -423,6 +433,87 @@ def generate_test_dat_concatenated():
         "irig_channel": 2,
         "seg1_duration": seg1_duration,
         "seg2_duration": seg2_duration,
-        "total_pulses": seg1_duration + seg2_duration,
+        "total_pulses": (seg1_duration - 1) + seg2_duration,
+        "expected_pairs": expected_pairs,
+    }
+
+
+# -- SpikeGLX nidq fixture (shared by test_sglx.py and test_decoder.py) -------
+
+@pytest.fixture(scope="session")
+def sglx_nidq(tmp_path_factory):
+    """Generate a synthetic SpikeGLX nidq .bin + .meta file pair.
+
+    3 channels (2 MN analog + 1 DW digital word), 30 kHz, 240 seconds.
+    IRIG signal on the last channel (index 2, the DW channel).
+    """
+    sample_rate = 30_000
+    n_channels = 3
+    duration_s = 240
+    start_dt = datetime(2026, 1, 15, 14, 30, 37, tzinfo=timezone.utc)
+
+    # Build IRIG bit sequence
+    minute_start = start_dt.replace(second=0, microsecond=0)
+    all_bits = []
+    frame_time = minute_start
+    end_dt = start_dt + timedelta(seconds=duration_s)
+    while frame_time < end_dt:
+        frame = generate_irig_h_frame(frame_time)
+        all_bits.extend(frame)
+        frame_time += timedelta(seconds=60)
+
+    start_bit = start_dt.second  # 37
+    recording_bits = all_bits[start_bit : start_bit + duration_s]
+
+    n_samples = sample_rate * duration_s
+    rng = np.random.default_rng(42)
+
+    # Build IRIG signal
+    irig = _build_irig_signal(recording_bits, sample_rate, n_samples, rng)
+
+    # Other channels: sinusoids
+    t = np.arange(n_samples, dtype=np.float64) / sample_rate
+    ch0 = 10_000.0 * np.sin(2 * np.pi * 10 * t)
+    ch1 = 10_000.0 * np.sin(2 * np.pi * 50 * t)
+
+    # Interleave and write .bin
+    data = np.empty((n_samples, n_channels), dtype=np.int16)
+    data[:, 0] = np.clip(ch0, -32768, 32767).astype(np.int16)
+    data[:, 1] = np.clip(ch1, -32768, 32767).astype(np.int16)
+    data[:, 2] = np.clip(irig, -32768, 32767).astype(np.int16)
+
+    tmp_dir = tmp_path_factory.mktemp("sglx")
+    bin_path = tmp_dir / "test_nidq.bin"
+    data.tofile(bin_path)
+
+    file_size_bytes = data.nbytes
+
+    # Write minimal .meta file
+    meta_path = bin_path.with_suffix(".meta")
+    meta_lines = [
+        f"nSavedChans={n_channels}",
+        "typeThis=nidq",
+        f"niSampRate={sample_rate}",
+        f"fileSizeBytes={file_size_bytes}",
+        "snsMnMaXaDw=2,0,0,1",
+    ]
+    meta_path.write_text("\n".join(meta_lines) + "\n")
+
+    # Pulse 0 is not detected (signal starts HIGH — no rising edge).
+    start_ts = start_dt.timestamp()
+    expected_pairs = [
+        (float(i * sample_rate), start_ts + float(i))
+        for i in range(1, duration_s)
+    ]
+
+    return {
+        "bin_path": bin_path,
+        "meta_path": meta_path,
+        "start_time": start_dt,
+        "start_timestamp": start_ts,
+        "sample_rate": sample_rate,
+        "n_channels": n_channels,
+        "irig_channel": 2,
+        "duration_s": duration_s,
         "expected_pairs": expected_pairs,
     }
