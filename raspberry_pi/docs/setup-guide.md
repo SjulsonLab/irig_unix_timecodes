@@ -6,10 +6,10 @@ Complete instructions for installing the GPS-disciplined IRIG-H timecode system 
 
 This guide covers two scenarios:
 
-- **Scenario A (GPS Server):** A Raspberry Pi with a GPS timing receiver becomes a stratum 1 NTP server and generates the IRIG-H timecode signal.
-- **Scenario B (Client):** A Raspberry Pi on the same LAN (no GPS) synchronises via NTP from the GPS server and generates its own IRIG-H signal.
+- **Scenario A (GPS Server):** A Raspberry Pi with a GPS timing receiver becomes a stratum 1 NTP server and runs the IRIG-H encoder.
+- **Scenario B (Client):** A Raspberry Pi on the same LAN (no GPS) synchronises via NTP from the GPS server and runs its own IRIG-H encoder.
 
-Both scenarios result in a systemd service (`irig-sender`) that outputs a continuous pulse-width-modulated TTL signal on a GPIO pin.
+Both scenarios result in a systemd service (`irig-sender`) that outputs a continuous pulse-width-modulated TTL signal on a GPIO pin — the encoder.
 
 ## Hardware Prerequisites
 

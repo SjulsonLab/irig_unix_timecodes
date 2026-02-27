@@ -1,32 +1,32 @@
-# Tutorial: Decoding IRIG Timecodes with neurokairos-pynapple
+# Tutorial: Decoding IRIG Timecodes with NeuroKairos
 
 ## The Problem: Multiple Clocks
 
 Multi-modal neuroscience experiments produce data from independent systems — electrophysiology rigs, video cameras, behavior controllers — each running on its own clock. These clocks drift relative to each other (typically 10–100 ppm), so you can't simply line up timestamps by assuming they started at the same time. To combine these streams in pynapple, you need a common time reference.
 
-IRIG timecodes solve this by embedding a UTC (Coordinated Universal Time) time signal directly into each recording. A dedicated device generates the IRIG signal, which gets recorded alongside neural data on a spare analog channel or displayed as a blinking LED visible to cameras. By decoding the IRIG signal from each recording independently, you anchor every stream to the same UTC reference — clock drift and all.
+IRIG timecodes solve this by embedding a UTC (Coordinated Universal Time) time signal directly into each recording. A dedicated device (the **encoder**) generates the IRIG signal, which gets recorded alongside neural data on a spare analog channel or displayed as a blinking LED visible to cameras. By running the **decoder** on each recording independently, you anchor every stream to the same UTC reference — clock drift and all. The resulting `ClockTable` acts as the **synchronizer**, bridging each device's local clock to UTC.
 
 ## What is IRIG?
 
-IRIG-H is a pulse-width-modulated timecode: one pulse per second, each encoding a binary digit. Pulse widths encode bit values: 0.2 seconds = binary 0, 0.5 seconds = binary 1, 0.8 seconds = reference marker. A complete frame is 60 pulses (one minute), with marker pulses at fixed positions acting as delimiters.
+IRIG-H is a pulse-width-modulated timecode: one pulse per second, each encoding a binary digit. Pulse widths encode bit values: 0.2 seconds = binary 0, 0.5 seconds = binary 1, 0.8 seconds = reference marker. A complete frame is 60 pulses (one minute), encoding the current UTC time (minutes, hours, day-of-year, year) in Binary Coded Decimal (BCD).
 
-Within each frame, the bits encode the current UTC time in BCD (binary-coded decimal): seconds, minutes, hours, day-of-year, and year. Frame boundaries are identified by two consecutive marker pulses — the last pulse of one frame and the first of the next.
+Within each frame, marker pulses at fixed positions act as delimiters. Frame boundaries are identified by two consecutive marker pulses — the last pulse of one frame and the first of the next.
 
-In a typical setup, a Raspberry Pi running [NeuroKairos](https://github.com/evilrobotxoxo/irig_unix_timecodes) generates the IRIG signal, which gets split and fed to each recording system. The decoder in neurokairos-pynapple handles real-world issues automatically: noise spikes (extra pulses), signal dropouts (missing pulses), and concatenated files where multiple recording segments are stitched together.
+In a typical setup, a Raspberry Pi running [NeuroKairos](https://github.com/evilrobotxoxo/irig_unix_timecodes) acts as the encoder, generating the IRIG signal that gets split and fed to each recording system. The decoder in `neurokairos` handles real-world issues automatically: noise spikes (extra pulses), signal dropouts (missing pulses), and concatenated files where multiple recording segments are stitched together.
 
 ## The Core Abstraction: ClockTable
 
-Every decoder in neurokairos-pynapple produces a `ClockTable` — a sparse mapping between two time domains:
+Every decoder in `neurokairos` produces a `ClockTable` — a sparse mapping between two time domains:
 
 - **source**: values in the recording's native domain (sample indices for electrophysiology, frame indices for video, seconds for pre-extracted intervals)
 - **reference**: UTC time in Unix format (the number of seconds since Jan. 1, 1970) when the corresponding source value was collected
 
-There's roughly one entry per IRIG pulse (~1 per second). Between entries, `np.interp` handles the conversion.
+There's roughly one entry per IRIG pulse (~1 per second). Between entries, `np.interp` handles the conversion. The ClockTable is the synchronizer — it captures the non-linear relationship between the local clock and UTC, correcting for drift.
 
 ```python
-import neurokairos_pynapple as nk
+import neurokairos
 
-ct = nk.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
+ct = neurokairos.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
 print(ct)
 # ClockTable: 238 entries (samples), rate=30000.0
 #   recording: 2025-01-15T14:30:37Z → 2025-01-15T14:34:35Z
@@ -46,7 +46,7 @@ samples = ct.reference_to_source(np.array([1736950240.0, 1736950250.0]))
 Every ClockTable carries a `metadata` dict with provenance, decoding quality, and NTP sync status. Decoders populate this automatically.
 
 ```python
-ct = nk.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
+ct = neurokairos.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
 
 # Provenance — where did this come from?
 ct.metadata["source_file"]     # "recording.dat"
@@ -66,14 +66,14 @@ ct.metadata["n_frames_decoded"] # complete IRIG frames decoded
 ct.metadata["n_concat_boundaries"]  # concatenation boundaries found
 ```
 
-**NTP sync status**: If the IRIG signal was generated by NeuroKairos, the decoder extracts chrony NTP sync quality from previously unused bits near the end of each IRIG frame. This tells you how well the IRIG generator was synchronized to UTC:
+**NTP sync status**: If the IRIG signal was generated by NeuroKairos, the decoder extracts chrony NTP sync quality from previously unused bits near the end of each IRIG frame. This tells you how well the encoder was synchronized to UTC:
 
 ```python
 ct.metadata["stratum"]              # worst-case NTP stratum (1–4; 4 = not synchronized)
 ct.metadata["UTC_sync_precision"]   # worst-case root dispersion, e.g. "< 0.25 ms"
 ```
 
-Stratum 1–2 with sub-millisecond dispersion is typical for a well-configured NeuroKairos setup. Higher stratum or larger dispersion means the IRIG generator's clock was less tightly locked to UTC during the recording. Since these bits are unused in standard IRIG-H, old recordings (without sync status encoding) have all-zero bits — this is ambiguous with genuinely excellent sync (stratum 1, < 0.25 ms).
+Stratum 1–2 with sub-millisecond dispersion is typical for a well-configured NeuroKairos setup. Higher stratum or larger dispersion means the encoder's clock was less tightly locked to UTC during the recording. Since these bits are unused in standard IRIG-H, old recordings (without sync status encoding) have all-zero bits — this is ambiguous with genuinely excellent sync (stratum 1, < 0.25 ms).
 
 Metadata persists through `save()`/`load()` — it's serialized as JSON inside the NPZ file.
 
@@ -83,97 +83,126 @@ IRIG decoding is the slow step — it reads the entire recording to find and cla
 
 ```python
 # First time: decode and auto-save (default behavior)
-ct = nk.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
+ct = neurokairos.decode_dat_irig("recording.dat", n_channels=3, irig_channel=2)
 # → saves recording.dat.clocktable.npz
 
 # Every subsequent time: reload in milliseconds
-ct = nk.ClockTable.load("recording.dat.clocktable.npz")
+ct = neurokairos.ClockTable.load("recording.dat.clocktable.npz")
 ```
 
 All `decode_*` functions auto-save by default (except `decode_intervals_irig`, which has no input file to derive a path from — pass `save="path.npz"` explicitly).
 
-## From ClockTable to Pynapple
+## IRIGDecoder: Unified API
 
-### BinaryFile (Convenient Path)
-
-`BinaryFile` wraps a memory-mapped data file and a ClockTable. It produces pynapple `Tsd`/`TsdFrame` objects on demand for arbitrary time segments, without materializing timestamps for the entire recording.
+`IRIGDecoder` provides a single facade over all decoder functions. Use one of the `from_*` classmethods to create an instance, then call `decode()`:
 
 ```python
-# Auto-loads ClockTable from recording.dat.clocktable.npz
-bf = nk.BinaryFile("recording.dat", n_channels=3)
+from neurokairos import IRIGDecoder
 
-# Extract 10 seconds of data from channel 0
-# Times are relative to time_origin (the first decoded UTC timestamp)
-data = bf.get(start=10.0, end=20.0, channels=0)   # → pynapple Tsd
-data = bf.get(start=10.0, end=20.0)                # → pynapple TsdFrame (all channels)
-data = bf.get(start=10.0, end=20.0, channels=[0, 1])  # → TsdFrame (selected channels)
+# Each classmethod mirrors the corresponding decode_* function
+decoder = IRIGDecoder.from_sglx("recording.bin", irig_channel="sync")
+decoder = IRIGDecoder.from_dat("recording.dat", n_channels=3, irig_channel=2)
+decoder = IRIGDecoder.from_video("behavior.avi", roi=(10, 20, 10, 20))
+decoder = IRIGDecoder.from_intervals(onsets, offsets=offsets)
+decoder = IRIGDecoder.from_events("session.txt", format="medpc")
 
-# Extract data for multiple intervals
-import pynapple as nap
-intervals = nap.IntervalSet(start=[10, 30, 50], end=[20, 40, 60])
-data = bf.restrict(intervals, channels=0)           # → pynapple Tsd
+# All produce a ClockTable via the same method
+clock_table = decoder.decode()
 ```
 
-### Manual Path (Custom Formats)
+The standalone `decode_*` functions are still available and do the same thing — `IRIGDecoder` simply provides a consistent interface.
 
-If your data isn't in a flat binary format, use the ClockTable directly to compute timestamps for whatever data structure you have:
+## Synchronizing Multiple Streams (ClockTable as Synchronizer)
 
-```python
-ct = nk.ClockTable.load("recording.dat.clocktable.npz")
-
-# Your custom loading code
-my_samples = np.arange(30000, 60000)  # sample indices you care about
-my_timestamps = ct.source_to_reference(my_samples.astype(np.float64))
-
-# Build pynapple objects yourself
-time_origin = ct.reference[0]
-relative_times = my_timestamps - time_origin
-tsd = nap.Tsd(t=relative_times, d=my_data)
-```
-
-## Decoding vs Synchronization
-
-neurokairos-pynapple uses a two-step model:
-
-1. **Decode** (time-reference): Anchor each recording stream to UTC using IRIG decoding. This corrects clock drift — each ClockTable captures the non-linear mapping between the local clock and UTC. This is what neurokairos-pynapple does.
-
-2. **Synchronize**: Shift time-referenced objects into the same reference frame so their timestamps are directly comparable. This is a simple offset — no drift correction. This is what pynapple's `sync_to()` does.
-
-The distinction matters. Two recordings with the same `time_origin` can be used together directly. Two recordings with different `time_origin` values need `sync_to()` to shift one into the other's frame. But both must be time-referenced first, or the drift makes synchronization meaningless over long recordings.
-
-## Synchronizing Multiple Streams
-
-Here's a complete multi-modal workflow: electrophysiology + video, decoded and synchronized.
+The ClockTable is the synchronizer: it bridges each device's local clock to UTC. When two recordings are each decoded against the same UTC reference, converting them to a shared `time_origin` puts them on a common time axis — even though the original devices had independent, drifting clocks.
 
 ```python
 import numpy as np
 import pynapple as nap
-import neurokairos_pynapple as nk
+import neurokairos
 
-# --- Electrophysiology ---
-# Decode IRIG from the ephys recording
-ephys_ct = nk.decode_dat_irig("ephys.dat", n_channels=64, irig_channel=63)
-ephys = nk.BinaryFile("ephys.dat", n_channels=64)
+# --- Decode each stream independently ---
+ephys_ct = neurokairos.decode_dat_irig("ephys.dat", n_channels=64, irig_channel=63)
+video_ct = neurokairos.decode_video_irig("behavior.avi", roi=(10, 20, 10, 20))
 
-# --- Video ---
-# Decode IRIG from the video (LED visible in a small ROI)
-video_ct = nk.decode_video_irig("behavior.avi", roi=(10, 20, 10, 20), fps=30.0)
+# --- Build pynapple time series using ClockTable as the synchronizer ---
 
-# Build a pynapple Tsd from video data (e.g., extracted tracking coordinates)
-# Frame indices → UTC timestamps via the video ClockTable
+# For ephys: convert sample indices to UTC, then to relative seconds
+sample_indices = np.arange(0, 120000, dtype=np.float64)  # 4 seconds at 30 kHz
+utc_times = ephys_ct.source_to_reference(sample_indices)
+time_origin = ephys_ct.reference[0]                       # first UTC timestamp
+ephys_tsd = nap.Tsd(t=utc_times - time_origin, d=my_neural_data)
+
+# For video: convert frame indices to UTC, then to relative seconds
 frame_indices = np.arange(len(x_positions), dtype=np.float64)
-frame_utc = video_ct.source_to_reference(frame_indices)
-video_origin = video_ct.reference[0]
-video_times = frame_utc - video_origin
+utc_times = video_ct.source_to_reference(frame_indices)
+tracking_tsd = nap.Tsd(t=utc_times - time_origin, d=x_positions)
+#                                       ^^^^^^^^^^^
+#                        use the SAME time_origin for both streams
 
-tracking = nap.Tsd(t=video_times, d=x_positions).set_time_origin(video_origin)
+# --- Analyze together in pynapple ---
+# Both Tsd objects now share a common time axis (seconds since ephys start)
+# You can compute cross-correlations, restrict to intervals, etc.
+```
 
-# --- Synchronize video to ephys reference frame ---
-tracking_synced = tracking.sync_to(ephys)
+The key insight: because both streams were decoded against the same UTC reference, converting them to the same `time_origin` puts them on a common time axis.
 
-# Now ephys.get() and tracking_synced share the same time reference
-lfp = ephys.get(start=100.0, end=110.0, channels=0)
-# tracking_synced timestamps are in the same frame — directly comparable
+## Decoding from Event Logs
+
+Some behavioral apparatus (e.g., MedPC, custom CSV loggers) record IRIG pulses as timestamped events rather than continuous waveforms. NeuroKairos can decode IRIG from these event logs and simultaneously convert behavioral events to UTC.
+
+### MedPC Files
+
+```python
+from neurokairos import IRIGDecoder
+
+# Decode IRIG pulses from a MedPC file
+decoder = IRIGDecoder.from_events(
+    "session.txt",
+    format="medpc",
+    pulse_high_code=27,    # event code for IRIG pulse HIGH
+    pulse_low_code=28,     # event code for IRIG pulse LOW
+)
+clock_table = decoder.decode()
+
+# Extract behavioral events converted to UTC
+events_utc = decoder.get_behavioral_events_utc()
+
+# Save behavioral events as CSV
+decoder.save_behavioral_events_csv("session_events_utc.csv")
+```
+
+### CSV/TSV Files
+
+```python
+decoder = IRIGDecoder.from_events(
+    "events.csv",
+    format="csv",
+    pulse_high_code="IRIG_HIGH",
+    pulse_low_code="IRIG_LOW",
+)
+clock_table = decoder.decode()
+```
+
+### Standalone Event Functions
+
+You can also use the lower-level functions directly:
+
+```python
+from neurokairos import parse_medpc_file, extract_irig_pulses, convert_events_to_utc
+from neurokairos import decode_intervals_irig
+
+# Parse the event log
+events = parse_medpc_file("session.txt")
+
+# Extract IRIG pulse onset/offset times
+onsets, offsets = extract_irig_pulses(events, high_code=27, low_code=28)
+
+# Decode to a ClockTable
+clock_table = decode_intervals_irig(onsets, offsets=offsets)
+
+# Convert non-IRIG events to UTC
+events_utc = convert_events_to_utc(events, clock_table)
 ```
 
 ## Data Format Reference
@@ -183,18 +212,11 @@ lfp = ephys.get(start=100.0, end=110.0, channels=0)
 For flat binary files with interleaved int16 channels (e.g., from Open Ephys, Intan).
 
 ```python
-ct = nk.decode_dat_irig(
+ct = neurokairos.decode_dat_irig(
     dat_path,       # path to the .dat file
     n_channels,     # total number of interleaved channels
     irig_channel,   # zero-based index of the IRIG channel
     save=True,      # save to <dat_path>.clocktable.npz (default True)
-)
-
-bf = nk.BinaryFile(
-    dat_path,        # same .dat file
-    n_channels,      # same channel count
-    clock_table=None,  # auto-loads from <dat_path>.clocktable.npz
-    dtype="int16",     # data type (default int16)
 )
 ```
 
@@ -203,16 +225,10 @@ bf = nk.BinaryFile(
 For SpikeGLX `.bin` files. Reads `nSavedChans` and sample rate from the paired `.meta` file automatically.
 
 ```python
-ct = nk.decode_sglx_irig(
+ct = neurokairos.decode_sglx_irig(
     bin_path,         # path to the .bin file (.meta must exist alongside)
     irig_channel,     # zero-based channel index, or "sync" for the last channel
     save=True,        # save to <bin_path>.clocktable.npz (default True)
-)
-
-# BinaryFile.from_sglx reads nSavedChans from .meta automatically
-bf = nk.BinaryFile.from_sglx(
-    bin_path,         # path to the .bin file
-    clock_table=None,   # auto-loads from <bin_path>.clocktable.npz
 )
 ```
 
@@ -223,7 +239,7 @@ The `"sync"` shortcut resolves to the last saved channel — this is where Spike
 For video files with a visible IRIG LED. Requires `opencv-python`.
 
 ```python
-ct = nk.decode_video_irig(
+ct = neurokairos.decode_video_irig(
     video_path,     # path to the video file (AVI, MP4, etc.)
     roi,            # (row_start, row_end, col_start, col_end) for the LED region
     fps=None,       # optional expected fps — warns if auto-estimate differs by >5%
@@ -238,7 +254,7 @@ To choose an ROI, open the video in any viewer, note the LED coordinates, and pa
 **Dropped frame diagnostics:**
 
 ```python
-from neurokairos_pynapple.video import dropped_frame_report
+from neurokairos.video import dropped_frame_report
 
 report = dropped_frame_report(ct, expected_fps=30.0)
 print(f"Dropped {report['total_dropped']} of {report['total_expected']} frames")
@@ -251,7 +267,7 @@ For when you already have pulse onset/offset times (e.g., from Open Ephys event 
 
 ```python
 # From arrays of onset and offset times (in seconds)
-ct = nk.decode_intervals_irig(
+ct = neurokairos.decode_intervals_irig(
     onsets,            # 1-D array of pulse onset times
     offsets=offsets,   # 1-D array of pulse offset times (required for arrays)
     source_units="seconds",  # label for the source axis (default "seconds")
@@ -260,7 +276,7 @@ ct = nk.decode_intervals_irig(
 
 # From a pynapple IntervalSet (or any object with .start/.end attributes)
 intervals = nap.IntervalSet(start=onsets, end=offsets)
-ct = nk.decode_intervals_irig(intervals, save="output.clocktable.npz")
+ct = neurokairos.decode_intervals_irig(intervals, save="output.clocktable.npz")
 ```
 
 ## ClockTable Persistence
@@ -277,33 +293,5 @@ Every decoder saves its ClockTable alongside the input file by default:
 Reload with `ClockTable.load()`:
 
 ```python
-ct = nk.ClockTable.load("recording.dat.clocktable.npz")
+ct = neurokairos.ClockTable.load("recording.dat.clocktable.npz")
 ```
-
-`BinaryFile` auto-loads from `<dat_path>.clocktable.npz` when no `clock_table` argument is passed.
-
-## BinaryFile Reference
-
-```python
-bf = nk.BinaryFile("recording.dat", n_channels=3)
-
-# Properties
-bf.n_samples          # total samples in file
-bf.n_channels         # number of channels
-bf.clock_table        # the ClockTable
-bf.dtype              # numpy dtype (e.g., int16)
-bf.time_origin        # UTC timestamp of t=0 (float)
-bf.duration           # total duration in seconds
-bf.time_range         # (start, end) in seconds relative to time_origin
-bf.segment_boundaries # indices where concatenation boundaries occur
-
-# Data extraction (times relative to time_origin)
-bf.get(start, end, channels=None)       # → Tsd (single int) or TsdFrame
-bf.restrict(interval_set, channels=None)  # → Tsd or TsdFrame for multiple intervals
-
-# Time origin management
-bf2 = bf.set_time_origin(new_origin)    # new BinaryFile sharing same data
-bf2 = bf.sync_to(other)                # set_time_origin(other.time_origin)
-```
-
-`get()` validates that the constant-rate assumption holds within the requested segment (warns if clock drift exceeds 0.5 ms). It raises `ValueError` if the segment spans a concatenation boundary — use `restrict()` with intervals that avoid boundaries, or call `get()` separately for each segment.

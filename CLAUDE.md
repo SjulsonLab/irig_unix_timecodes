@@ -44,9 +44,9 @@ pytest tests/ -v
 
 ## Architecture
 
-Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on any machine).
+Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder** (Python, extracts timing from recordings), and **Synchronizer** (`ClockTable`, bridges clock domains).
 
-### Generation (C sender)
+### Encoder (C sender)
 - `raspberry_pi/sender/irig_sender.c` — Production sender. Uses direct `/dev/mem` GPIO register access with hybrid sleep/busy-wait for nanosecond-level timing precision. Default output on BCM GPIO 11 (normal), inverted disabled. Both pins configurable via CLI flags (`-p`/`-n`). Polls chrony every ~60 seconds and encodes sync status (stratum, root dispersion) in unused IRIG-H frame bits 43-44 and 46-48. Controls the RPi ACT LED to indicate sync quality. Runs as systemd service at Nice -20.
 
 ### Chrony Integration

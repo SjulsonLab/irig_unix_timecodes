@@ -8,10 +8,10 @@ NeuroKairos solves this by embedding an objective UTC time reference into every 
 
 ## System Overview
 
-The pipeline has two phases: **generation** (during the experiment) and **decoding** (post-hoc analysis).
+The pipeline has three components: the **Encoder** (during the experiment), the **Decoder** (post-hoc extraction), and the **Synchronizer** (aligning streams via ClockTable).
 
 ```
-Phase 1: Generation (during experiment)
+Encoder (during experiment)
                                           ┌──────────────────┐
   GPS satellites ──► Raspberry Pi ────────┤  GPIO TTL output  │
                      (UTC clock +         └────────┬─────────┘
@@ -23,14 +23,14 @@ Phase 1: Generation (during experiment)
                                     (spare     (LED in      device
                                     channel)    view)
 
-Phase 2: Decoding (post-hoc)
+Decoder (post-hoc) → Synchronizer (ClockTable)
 
   Recording file ──► neurokairos ──► ClockTable ──► pynapple
-  (with IRIG           Python        (.npz)        (synchronized
-   signal inside)      decoder                      time series)
+  (with IRIG           decoder        (.npz)        (synchronized
+   signal inside)                    synchronizer    time series)
 ```
 
-## Phase 1: Generating the Timing Signal
+## The Encoder: Generating the Timing Signal
 
 ### Hardware
 
@@ -65,7 +65,7 @@ The GPIO output is a TTL voltage signal (0 V / 3.3 V). You split this signal and
 
 No modifications to your existing equipment are required — you just need one spare input channel or an LED visible to the camera.
 
-## Phase 2: Decoding IRIG from Recordings
+## The Decoder: Extracting IRIG from Recordings
 
 After the experiment, you run the `neurokairos` Python decoder on each recording file. The decoder:
 
@@ -121,10 +121,28 @@ samples = clock_table.reference_to_source(np.array([1736950240.0, 1736950250.0])
 | `decode_dat_irig` | Interleaved int16 `.dat` (Open Ephys, Intan, etc.) | sample indices |
 | `decode_video_irig` | Video file (AVI, MP4) with visible IRIG LED | frame indices |
 | `decode_intervals_irig` | Pre-extracted pulse onset/offset times | seconds (or custom) |
+| `IRIGDecoder.from_events` | MedPC or CSV/TSV event logs | seconds |
 
-## From ClockTable to Pynapple
+**Unified API:** `IRIGDecoder` wraps all of the above with a consistent `from_*` / `decode()` interface:
 
-Pynapple expects time series (`Tsd`, `TsdFrame`) with timestamps in seconds relative to some origin. The ClockTable bridges the gap:
+```python
+from neurokairos import IRIGDecoder
+
+decoder = IRIGDecoder.from_sglx("recording.bin", irig_channel="sync")
+clock_table = decoder.decode()
+```
+
+**Event log pipeline:** For behavioral apparatus that log IRIG pulses as timestamped events (e.g., MedPC TIME.CODE files or generic CSV/TSV), `IRIGDecoder.from_events` extracts IRIG pulse intervals from the log, decodes them into a ClockTable, and can then convert the non-IRIG behavioral events to UTC:
+
+```python
+decoder = IRIGDecoder.from_events("session.txt", format="medpc")
+clock_table = decoder.decode()
+events_utc = decoder.get_behavioral_events_utc()
+```
+
+## The Synchronizer: ClockTable as the Bridge Between Clock Domains
+
+The ClockTable is the synchronizer — it bridges the gap between each device's local clock and UTC. To use the synchronized data in pynapple (`Tsd`, `TsdFrame`), convert source timestamps to UTC via the ClockTable and pick a shared time origin:
 
 ```python
 import numpy as np
@@ -202,9 +220,10 @@ This lets you verify after the fact that the timing signal was properly GPS-lock
 |-------|-------|--------|
 | **GPS receiver** | Satellite signals | PPS pulse + NMEA time |
 | **Chrony** | PPS + NMEA | Disciplined system clock (stratum 1) |
-| **IRIG sender** | System clock | TTL pulses on GPIO pin |
+| **Encoder** (`irig_sender`) | System clock | TTL pulses on GPIO pin |
 | **Recording** | TTL pulses (or LED) | Binary data file with IRIG on one channel |
-| **neurokairos decoder** | Recording file | **ClockTable** (.npz): sample index <-> UTC mapping |
+| **Decoder** (`neurokairos`) | Recording file | **ClockTable** (.npz): sample index <-> UTC mapping |
+| **Synchronizer** (ClockTable) | Source timestamps | UTC timestamps (or vice versa) |
 | **Your analysis code** | ClockTable + raw data | Pynapple Tsd/TsdFrame with UTC-referenced timestamps |
 
-The ClockTable is the handoff point. NeuroKairos produces it; your analysis code (with pynapple or anything else) consumes it.
+The ClockTable is the synchronizer — the handoff point between the decoder and your analysis code. NeuroKairos produces it; your analysis code (with pynapple or anything else) consumes it.
