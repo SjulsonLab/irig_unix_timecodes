@@ -60,14 +60,21 @@ Two-phase system: **generation** (on Raspberry Pi) and **decoding** (post-hoc on
 - `irig.py` — Complete IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding (complete + partial), robust handling of missing/extra pulses and concatenated files, `build_clock_table` orchestrator, plus top-level entry points `decode_dat_irig` and `decode_intervals_irig`.
 - `sglx.py` — SpikeGLX `.meta` reader + `decode_sglx_irig` entry point.
 - `video.py` — Video LED extraction + `decode_video_irig` entry point. OpenCV (`cv2`) is an optional dependency.
+- `events.py` — Event log parsing for MedPC files and CSV/TSV. Extracts IRIG pulse events and behavioral events from timestamped event logs. Supports MedPC TIME.CODE format and generic CSV/TSV. Provides `extract_irig_pulses` (pair HIGH/LOW → onsets/offsets for `decode_intervals_irig`), `filter_non_pulse_events`, `convert_events_to_utc`, and `write_events_csv`.
+- `decoder.py` — `IRIGDecoder` unified facade class with `from_dat`, `from_sglx`, `from_video`, `from_intervals`, and `from_events` classmethods. Delegates to the standalone `decode_*` functions. Event-based inputs support post-decode behavioral event extraction via `get_behavioral_events_utc` and `save_behavioral_events_csv`.
 
 ### Public API (`neurokairos/__init__.py`)
 - `ClockTable` — sparse time mapping
+- `IRIGDecoder` — unified decoder facade (from `decoder.py`)
 - `bcd_encode`, `bcd_decode` — BCD encoding/decoding
 - `decode_dat_irig` — decode from interleaved int16 `.dat` files
 - `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
 - `decode_video_irig` — decode from video files with IRIG LED
 - `decode_intervals_irig` — decode from pre-extracted pulse intervals
+- `parse_medpc_file` — parse MedPC data files
+- `parse_csv_events` — parse CSV/TSV event files
+- `extract_irig_pulses` — extract IRIG pulse onsets/offsets from event data
+- `convert_events_to_utc` — convert event timestamps to UTC via ClockTable
 - BCD weight constants: `SECONDS_WEIGHTS`, `MINUTES_WEIGHTS`, `HOURS_WEIGHTS`, `DAY_OF_YEAR_WEIGHTS`, `DECISECONDS_WEIGHTS`, `YEARS_WEIGHTS`
 
 ## Key Constants (neurokairos/irig.py)
