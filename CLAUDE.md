@@ -55,7 +55,7 @@ Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder*
 - `raspberry_pi/scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
 
 ### Core Python Library (`neurokairos/`)
-- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional interpolation (linear extrapolation up to 1.5 s beyond boundaries; warns and clamps beyond that), optional per-pulse sync arrays (`sync_stratum`, `sync_dispersion_upperbound_ms`), save/load to NPZ, JSON-serializable metadata.
+- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional interpolation (linear extrapolation up to 1.5 s beyond boundaries; returns NaN beyond that), optional per-pulse sync arrays (`sync_stratum`, `sync_dispersion_upperbound_ms`), save/load to NPZ, JSON-serializable metadata.
 
 ### Decoder Subpackage (`neurokairos/decoders/`)
 - `ttl.py` — Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths`. NumPy only, no dependencies on other modules.
@@ -79,6 +79,12 @@ Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder*
 - `convert_events_to_utc` — convert event timestamps to UTC via ClockTable
 - `ROOT_DISPERSION_UPPER_MS` — bucket upper bounds for root dispersion (ms)
 - BCD weight constants: `SECONDS_WEIGHTS`, `MINUTES_WEIGHTS`, `HOURS_WEIGHTS`, `DAY_OF_YEAR_WEIGHTS`, `DECISECONDS_WEIGHTS`, `YEARS_WEIGHTS`
+
+### MATLAB Interface (`matlab/`)
+- `ClockTable.m` — MATLAB classdef that loads `.clocktable.npz` files and provides `source_to_reference`/`reference_to_source` interpolation matching Python behavior exactly (including 1.5 s extrapolation limit → NaN beyond).
+- `decode_irig.m` — Function that shells out to Python to run decoding, then loads the resulting NPZ. Supports `'format'`, `'n_channels'`, `'irig_channel'`, and `'python'` name-value pairs.
+- `+nk_internal/read_npy.m` — Internal helper to parse `.npy` files (float64 and unicode string dtypes).
+- `+nk_internal/read_npz.m` — Internal helper to unzip `.npz` and dispatch to `read_npy`.
 
 ## Key Constants (neurokairos/decoders/irig.py)
 

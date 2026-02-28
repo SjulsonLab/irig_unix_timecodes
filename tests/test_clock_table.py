@@ -169,7 +169,7 @@ class TestExtrapolation:
             ct_offset.source_to_reference(0.0)  # 1.0 s extrapolation
 
     def test_warning_beyond_limit(self):
-        """Extrapolation beyond 1.5 s should warn and clamp."""
+        """Extrapolation beyond 1.5 s should warn and return NaN."""
         ct = ClockTable(
             source=np.array([90000.0, 120000.0, 150000.0]),
             reference=np.array([1003.0, 1004.0, 1005.0]),
@@ -178,8 +178,7 @@ class TestExtrapolation:
         # source=0.0 is 90000 samples = 3.0 s before first entry
         with pytest.warns(UserWarning, match="exceeds the"):
             result = ct.source_to_reference(0.0)
-        # Should clamp to boundary value
-        np.testing.assert_allclose(result, 1003.0)
+        assert np.isnan(result)
 
     def test_warning_beyond_limit_above(self):
         ct = ClockTable(
@@ -190,7 +189,7 @@ class TestExtrapolation:
         # 120000 samples = 2.0 s beyond last entry
         with pytest.warns(UserWarning, match="exceeds the"):
             result = ct.source_to_reference(120000.0)
-        np.testing.assert_allclose(result, 1002.0)
+        assert np.isnan(result)
 
     def test_reference_to_source_warning_beyond_limit(self):
         ct = ClockTable(
@@ -200,13 +199,76 @@ class TestExtrapolation:
         )
         with pytest.warns(UserWarning, match="exceeds the"):
             result = ct.reference_to_source(998.0)  # 2.0 s before
-        np.testing.assert_allclose(result, 0.0)
+        assert np.isnan(result)
 
     def test_array_extrapolation(self, ct_offset):
         """Extrapolation works correctly for arrays with mixed in/out values."""
         values = np.array([0.0, 30000.0, 60000.0, 90000.0])
         result = ct_offset.source_to_reference(values)
         np.testing.assert_allclose(result, [999.0, 1000.0, 1001.0, 1002.0])
+
+    def test_extrapolation_within_limit_value(self):
+        """Query 1.0 s beyond boundary → correct extrapolated value, not NaN."""
+        ct = ClockTable(
+            source=np.array([30000.0, 60000.0, 90000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+        # 1.0 s below, within the 1.5 s limit
+        result = ct.source_to_reference(0.0)
+        np.testing.assert_allclose(result, 999.0)
+        assert not np.isnan(result)
+
+    def test_extrapolation_beyond_limit_returns_nan(self):
+        """Query 3.0 s beyond boundary → NaN, with warning."""
+        ct = ClockTable(
+            source=np.array([90000.0, 120000.0, 150000.0]),
+            reference=np.array([1003.0, 1004.0, 1005.0]),
+            nominal_rate=30000.0,
+        )
+        # source=0.0 is 90000 samples = 3.0 s before first entry
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.source_to_reference(0.0)
+        assert np.isnan(result), "Beyond-limit extrapolation should return NaN"
+
+    def test_extrapolation_beyond_limit_returns_nan_above(self):
+        """Query 2.0 s beyond last entry → NaN, with warning."""
+        ct = ClockTable(
+            source=np.array([0.0, 30000.0, 60000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+        # 120000 samples = 2.0 s beyond last entry
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.source_to_reference(120000.0)
+        assert np.isnan(result), "Beyond-limit extrapolation should return NaN"
+
+    def test_extrapolation_beyond_limit_returns_nan_ref_to_src(self):
+        """reference_to_source: beyond limit → NaN."""
+        ct = ClockTable(
+            source=np.array([0.0, 30000.0, 60000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.reference_to_source(998.0)  # 2.0 s before
+        assert np.isnan(result), "Beyond-limit extrapolation should return NaN"
+
+    def test_extrapolation_mixed_array(self):
+        """Array with some within-limit and some beyond → correct + NaN."""
+        ct = ClockTable(
+            source=np.array([30000.0, 60000.0, 90000.0]),
+            reference=np.array([1000.0, 1001.0, 1002.0]),
+            nominal_rate=30000.0,
+        )
+        # 0.0 is 1.0 s below (within limit), -60000 is 3.0 s below (beyond)
+        values = np.array([-60000.0, 0.0, 60000.0, 90000.0])
+        with pytest.warns(UserWarning, match="exceeds the"):
+            result = ct.source_to_reference(values)
+        assert np.isnan(result[0]), "3.0 s beyond should be NaN"
+        np.testing.assert_allclose(result[1], 999.0)  # 1.0 s within limit
+        np.testing.assert_allclose(result[2], 1001.0)  # exact match
+        np.testing.assert_allclose(result[3], 1002.0)  # exact match
 
 
 class TestMetadata:

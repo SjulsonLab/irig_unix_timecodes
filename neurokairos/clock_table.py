@@ -74,8 +74,8 @@ class ClockTable:
         """Convert source-domain values to reference-domain via interpolation.
 
         Linearly extrapolates up to 1.5 s beyond the ClockTable boundaries
-        (one IRIG-H pulse interval).  Beyond that, clamps to the boundary
-        value and issues a warning.
+        (one IRIG-H pulse interval).  Beyond that, returns NaN and issues
+        a warning.
         """
         values_arr = np.asarray(values, dtype=np.float64)
         scalar = values_arr.ndim == 0
@@ -88,14 +88,16 @@ class ClockTable:
                 self.source[1] - self.source[0]
             )
             extrap = self.reference[0] + (v[below] - self.source[0]) * slope
-            max_dist = float(np.max(self.reference[0] - extrap))
-            if max_dist <= _EXTRAP_LIMIT_S:
-                result[below] = extrap
-            else:
+            dist = self.reference[0] - extrap
+            # Apply extrapolated values for within-limit entries
+            within = dist <= _EXTRAP_LIMIT_S
+            result[below] = np.where(within, extrap, np.nan)
+            if not np.all(within):
+                max_dist = float(np.max(dist))
                 warnings.warn(
                     f"source_to_reference: extrapolating {max_dist:.1f} s before "
                     f"the first ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
-                    f"limit. Clamping to boundary value.",
+                    f"limit. Returning NaN.",
                     stacklevel=2,
                 )
 
@@ -105,14 +107,16 @@ class ClockTable:
                 self.source[-1] - self.source[-2]
             )
             extrap = self.reference[-1] + (v[above] - self.source[-1]) * slope
-            max_dist = float(np.max(extrap - self.reference[-1]))
-            if max_dist <= _EXTRAP_LIMIT_S:
-                result[above] = extrap
-            else:
+            dist = extrap - self.reference[-1]
+            # Apply extrapolated values for within-limit entries
+            within = dist <= _EXTRAP_LIMIT_S
+            result[above] = np.where(within, extrap, np.nan)
+            if not np.all(within):
+                max_dist = float(np.max(dist))
                 warnings.warn(
                     f"source_to_reference: extrapolating {max_dist:.1f} s beyond "
                     f"the last ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
-                    f"limit. Clamping to boundary value.",
+                    f"limit. Returning NaN.",
                     stacklevel=2,
                 )
 
@@ -122,8 +126,8 @@ class ClockTable:
         """Convert reference-domain values to source-domain via interpolation.
 
         Linearly extrapolates up to 1.5 s beyond the ClockTable boundaries
-        (one IRIG-H pulse interval).  Beyond that, clamps to the boundary
-        value and issues a warning.
+        (one IRIG-H pulse interval).  Beyond that, returns NaN and issues
+        a warning.
         """
         values_arr = np.asarray(values, dtype=np.float64)
         scalar = values_arr.ndim == 0
@@ -136,14 +140,16 @@ class ClockTable:
                 self.reference[1] - self.reference[0]
             )
             extrap = self.source[0] + (v[below] - self.reference[0]) * slope
-            max_dist = float(np.max(self.reference[0] - v[below]))
-            if max_dist <= _EXTRAP_LIMIT_S:
-                result[below] = extrap
-            else:
+            dist = self.reference[0] - v[below]
+            # Apply extrapolated values for within-limit entries
+            within = dist <= _EXTRAP_LIMIT_S
+            result[below] = np.where(within, extrap, np.nan)
+            if not np.all(within):
+                max_dist = float(np.max(dist))
                 warnings.warn(
                     f"reference_to_source: extrapolating {max_dist:.1f} s before "
                     f"the first ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
-                    f"limit. Clamping to boundary value.",
+                    f"limit. Returning NaN.",
                     stacklevel=2,
                 )
 
@@ -153,14 +159,16 @@ class ClockTable:
                 self.reference[-1] - self.reference[-2]
             )
             extrap = self.source[-1] + (v[above] - self.reference[-1]) * slope
-            max_dist = float(np.max(v[above] - self.reference[-1]))
-            if max_dist <= _EXTRAP_LIMIT_S:
-                result[above] = extrap
-            else:
+            dist = v[above] - self.reference[-1]
+            # Apply extrapolated values for within-limit entries
+            within = dist <= _EXTRAP_LIMIT_S
+            result[above] = np.where(within, extrap, np.nan)
+            if not np.all(within):
+                max_dist = float(np.max(dist))
                 warnings.warn(
                     f"reference_to_source: extrapolating {max_dist:.1f} s beyond "
                     f"the last ClockTable entry exceeds the {_EXTRAP_LIMIT_S} s "
-                    f"limit. Clamping to boundary value.",
+                    f"limit. Returning NaN.",
                     stacklevel=2,
                 )
 
