@@ -163,3 +163,30 @@ def test_report_skip_without_matplotlib(generate_test_dat):
     assert isinstance(ct, ClockTable)
     # But no PNG should be created
     assert not png_path.exists(), "PNG should not be created without matplotlib"
+
+
+# -- Unit: drift panel title shows measured rate ------------------------------
+
+def test_drift_title_shows_measured_rate(tmp_path):
+    """The clock drift panel title should include the measured rate with units.
+
+    For source_units='samples', the title should contain the rate in Hz,
+    e.g. 'Clock jitter (measured rate: 30000.00 Hz)'.
+    """
+    ct = _make_clock_table(sps=30_000.0)
+    out = tmp_path / "report_drift_title.png"
+
+    # Patch _draw_clock_drift to capture the title it sets
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    from neurokairos.decoders.report import _draw_clock_drift
+    _draw_clock_drift(ax, ct)
+    title = ax.get_title()
+    plt.close(fig)
+
+    assert "30000.00 Hz" in title, (
+        f"Drift title should show measured rate in Hz, got: {title!r}"
+    )
