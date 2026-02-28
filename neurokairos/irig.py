@@ -520,6 +520,57 @@ def _find_concat_boundary(pulse_onsets, a_idx, b_idx):
     return (a_idx + b_idx + 1) // 2
 
 
+def _build_sync_arrays(n_pulses, sync_anchors):
+    """Build per-pulse sync status arrays from frame-level anchor points.
+
+    Sets values at each anchor's pulse index, forward-fills through the
+    array, then backward-fills leading NaNs from the first valid reading.
+
+    Parameters
+    ----------
+    n_pulses : int
+        Total number of pulses (length of output arrays).
+    sync_anchors : list of (int, dict)
+        ``(pulse_index, sync_dict)`` pairs from decoded frames.
+        Each dict has ``'stratum'`` (1-4) and ``'root_dispersion_bucket'``
+        (0-7).
+
+    Returns
+    -------
+    (sync_stratum, sync_dispersion_upperbound_ms) : tuple of ndarray or
+        (None, None) if no anchors.
+    """
+    if not sync_anchors:
+        return None, None
+
+    stratum = np.full(n_pulses, np.nan, dtype=np.float64)
+    disp = np.full(n_pulses, np.nan, dtype=np.float64)
+
+    # Set values at each frame's start pulse
+    for idx, ss in sync_anchors:
+        stratum[idx] = float(ss["stratum"])
+        disp[idx] = ROOT_DISPERSION_UPPER_MS[ss["root_dispersion_bucket"]]
+
+    # Forward-fill: propagate last valid value to subsequent NaN positions
+    last_s = np.nan
+    last_d = np.nan
+    for i in range(n_pulses):
+        if not np.isnan(stratum[i]):
+            last_s = stratum[i]
+            last_d = disp[i]
+        else:
+            stratum[i] = last_s
+            disp[i] = last_d
+
+    # Backward-fill leading NaNs from first valid reading
+    first_valid = np.argmax(~np.isnan(stratum))
+    if first_valid > 0:
+        stratum[:first_valid] = stratum[first_valid]
+        disp[:first_valid] = disp[first_valid]
+
+    return stratum, disp
+
+
 def build_clock_table(pulse_onsets, pulse_widths):
     """Build a :class:`ClockTable` from detected IRIG pulses.
 
@@ -558,6 +609,7 @@ def build_clock_table(pulse_onsets, pulse_widths):
 
     decoded = []  # (pulse_index, unix_timestamp)
     sync_statuses = []  # per-frame sync status dicts (complete frames only)
+    sync_anchors = []   # (pulse_index, sync_dict) for per-pulse arrays
     for start in frame_starts:
         end = start + 60
         if end <= n_clean:
@@ -567,6 +619,7 @@ def build_clock_table(pulse_onsets, pulse_widths):
                 ss = decode_sync_status(pulse_types[start:end])
                 if ss["stratum"] >= 0:
                     sync_statuses.append(ss)
+                    sync_anchors.append((int(start), ss))
                 continue
         # Fall back to partial decoding for each boundary
         ts = decode_partial_frame(pulse_types, start)
@@ -639,12 +692,19 @@ def build_clock_table(pulse_onsets, pulse_widths):
         ),
     }
 
+    # Build per-pulse sync arrays from frame anchors
+    sync_stratum, sync_disp = _build_sync_arrays(
+        n_clean, sync_anchors
+    )
+
     return ClockTable(
         source=pulse_onsets.astype(np.float64),
         reference=reference,
         nominal_rate=sps,
         source_units="samples",
         metadata=metadata,
+        sync_stratum=sync_stratum,
+        sync_dispersion_upperbound_ms=sync_disp,
     )
 
 
@@ -740,7 +800,7 @@ def decode_intervals_irig(intervals, offsets=None, source_units="seconds",
     widths = offs - onsets
     ct = build_clock_table(onsets, widths)
 
-    # Override source_units, carrying over metadata
+    # Override source_units, carrying over metadata and sync arrays
     metadata = dict(ct.metadata) if ct.metadata else {}
     ct = ClockTable(
         source=ct.source,
@@ -748,6 +808,8 @@ def decode_intervals_irig(intervals, offsets=None, source_units="seconds",
         nominal_rate=ct.nominal_rate,
         source_units=source_units,
         metadata=metadata,
+        sync_stratum=ct.sync_stratum,
+        sync_dispersion_upperbound_ms=ct.sync_dispersion_upperbound_ms,
     )
 
     if save is not None:

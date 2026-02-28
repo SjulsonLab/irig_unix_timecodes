@@ -24,6 +24,10 @@ class ClockTable:
     nominal_rate: float
     source_units: Optional[str] = None
     metadata: Optional[dict] = field(default=None, repr=False)
+    sync_stratum: Optional[np.ndarray] = field(default=None, repr=False)
+    sync_dispersion_upperbound_ms: Optional[np.ndarray] = field(
+        default=None, repr=False
+    )
 
     def __post_init__(self):
         self.source = np.asarray(self.source, dtype=np.float64)
@@ -40,6 +44,31 @@ class ClockTable:
             raise TypeError(
                 f"metadata must be a dict or None, got {type(self.metadata).__name__}"
             )
+
+        # Validate sync arrays: must be provided as a pair and match source length
+        has_stratum = self.sync_stratum is not None
+        has_disp = self.sync_dispersion_upperbound_ms is not None
+        if has_stratum != has_disp:
+            raise ValueError(
+                "Must provide both sync_stratum and "
+                "sync_dispersion_upperbound_ms, or neither"
+            )
+        if has_stratum:
+            self.sync_stratum = np.asarray(self.sync_stratum, dtype=np.float64)
+            self.sync_dispersion_upperbound_ms = np.asarray(
+                self.sync_dispersion_upperbound_ms, dtype=np.float64
+            )
+            if len(self.sync_stratum) != len(self.source):
+                raise ValueError(
+                    f"sync_stratum length ({len(self.sync_stratum)}) must "
+                    f"match source length ({len(self.source)})"
+                )
+            if len(self.sync_dispersion_upperbound_ms) != len(self.source):
+                raise ValueError(
+                    f"sync_dispersion_upperbound_ms length "
+                    f"({len(self.sync_dispersion_upperbound_ms)}) must "
+                    f"match source length ({len(self.source)})"
+                )
 
     def source_to_reference(self, values) -> np.ndarray:
         """Convert source-domain values to reference-domain via interpolation.
@@ -154,6 +183,11 @@ class ClockTable:
                 raise TypeError(
                     f"metadata values must be JSON-serializable: {e}"
                 ) from e
+        if self.sync_stratum is not None:
+            arrays["sync_stratum"] = self.sync_stratum
+            arrays["sync_dispersion_upperbound_ms"] = (
+                self.sync_dispersion_upperbound_ms
+            )
         np.savez(path, **arrays)
 
     @classmethod
@@ -165,12 +199,22 @@ class ClockTable:
         metadata = None
         if "_metadata" in data:
             metadata = _json.loads(str(data["_metadata"]))
+        sync_stratum = (
+            data["sync_stratum"] if "sync_stratum" in data else None
+        )
+        sync_disp = (
+            data["sync_dispersion_upperbound_ms"]
+            if "sync_dispersion_upperbound_ms" in data
+            else None
+        )
         return cls(
             source=data["source"],
             reference=data["reference"],
             nominal_rate=float(data["nominal_rate"]),
             source_units=source_units,
             metadata=metadata,
+            sync_stratum=sync_stratum,
+            sync_dispersion_upperbound_ms=sync_disp,
         )
 
     def __repr__(self):
@@ -214,6 +258,22 @@ class ClockTable:
             lines.append(f"  file: {source_file} ({source_path})")
         elif source_file:
             lines.append(f"  file: {source_file}")
+
+        # Sync status summary when per-pulse arrays are present
+        if self.sync_stratum is not None:
+            valid = ~np.isnan(self.sync_stratum)
+            if np.any(valid):
+                s_min = int(np.nanmin(self.sync_stratum))
+                s_max = int(np.nanmax(self.sync_stratum))
+                d_min = np.nanmin(self.sync_dispersion_upperbound_ms)
+                d_max = np.nanmax(self.sync_dispersion_upperbound_ms)
+                s_str = str(s_min) if s_min == s_max else f"{s_min}\u2013{s_max}"
+                d_str = (
+                    f"< {d_min} ms"
+                    if d_min == d_max
+                    else f"< {d_min}\u2013{d_max} ms"
+                )
+                lines.append(f"  sync: stratum {s_str}, dispersion {d_str}")
 
         lines.append(
             f"  source=[{self.source[0]:.1f}..{self.source[-1]:.1f}], "

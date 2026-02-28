@@ -525,18 +525,28 @@ class TestDecodeSyncStatus:
 class TestSyncArrays:
     def test_build_clock_table_sync_arrays(self):
         """Synthetic frames with known sync bits produce correct per-pulse
-        arrays of the right length, forward-filled from frame boundaries."""
-        # Frame 1: stratum 2 (enc=1), dispersion bucket 3 (< 2 ms)
-        # Frame 2: stratum 3 (enc=2), dispersion bucket 5 (< 8 ms)
+        arrays of the right length, forward-filled from frame boundaries.
+
+        Uses 3 frames: frame 1 is only partially decoded (no preceding marker
+        boundary), so its sync bits aren't available. Frames 2 and 3 are
+        decoded as complete frames with distinct sync values.
+        """
+        # Frame 1: placeholder (decoded partially, no sync extracted)
+        # Frame 2: stratum 2 (enc=1), dispersion bucket 3 (< 2 ms)
+        # Frame 3: stratum 3 (enc=2), dispersion bucket 5 (< 8 ms)
         f1 = _make_frame_with_sync(
             second=0, minute=0, hour=12, day=100, year=26,
             stratum_enc=1, disp_enc=3,
         )
         f2 = _make_frame_with_sync(
             second=0, minute=1, hour=12, day=100, year=26,
+            stratum_enc=1, disp_enc=3,
+        )
+        f3 = _make_frame_with_sync(
+            second=0, minute=2, hour=12, day=100, year=26,
             stratum_enc=2, disp_enc=5,
         )
-        onsets, widths = _frames_to_pulse_data([f1, f2])
+        onsets, widths = _frames_to_pulse_data([f1, f2, f3])
         ct = build_clock_table(onsets, widths)
 
         # Arrays must exist and match source length
@@ -545,17 +555,23 @@ class TestSyncArrays:
         assert len(ct.sync_stratum) == len(ct.source)
         assert len(ct.sync_dispersion_upperbound_ms) == len(ct.source)
 
-        # Frame 1 pulses (0-59): stratum=2, disp upper=2.0
+        # Pulses 0-59 (before frame 2): backward-filled from frame 2
+        # Frame 2 starts at pulse 60: stratum=2, disp upper=2.0
         assert ct.sync_stratum[0] == 2.0
         assert ct.sync_stratum[30] == 2.0
         assert ct.sync_dispersion_upperbound_ms[0] == pytest.approx(2.0)
         assert ct.sync_dispersion_upperbound_ms[30] == pytest.approx(2.0)
 
-        # Frame 2 pulses (60-119): stratum=3, disp upper=8.0
-        assert ct.sync_stratum[60] == 3.0
-        assert ct.sync_stratum[90] == 3.0
-        assert ct.sync_dispersion_upperbound_ms[60] == pytest.approx(8.0)
-        assert ct.sync_dispersion_upperbound_ms[90] == pytest.approx(8.0)
+        # Pulses 60-119 (frame 2): stratum=2, disp upper=2.0
+        assert ct.sync_stratum[60] == 2.0
+        assert ct.sync_stratum[90] == 2.0
+        assert ct.sync_dispersion_upperbound_ms[60] == pytest.approx(2.0)
+
+        # Frame 3 starts at pulse 120: stratum=3, disp upper=8.0
+        assert ct.sync_stratum[120] == 3.0
+        assert ct.sync_stratum[150] == 3.0
+        assert ct.sync_dispersion_upperbound_ms[120] == pytest.approx(8.0)
+        assert ct.sync_dispersion_upperbound_ms[150] == pytest.approx(8.0)
 
         # No NaNs anywhere
         assert not np.any(np.isnan(ct.sync_stratum))
@@ -563,7 +579,10 @@ class TestSyncArrays:
 
     def test_build_clock_table_no_sync(self):
         """All-zero status bits (old recordings or perfect GPS) produce
-        stratum=1 and dispersion=0.25 everywhere (backward compat)."""
+        stratum=1 and dispersion=0.25 everywhere (backward compat).
+
+        Uses 3 frames so frames 2-3 are decoded as complete frames.
+        """
         f1 = _make_frame_with_sync(
             second=0, minute=0, hour=12, day=100, year=26,
             stratum_enc=0, disp_enc=0,
@@ -572,7 +591,11 @@ class TestSyncArrays:
             second=0, minute=1, hour=12, day=100, year=26,
             stratum_enc=0, disp_enc=0,
         )
-        onsets, widths = _frames_to_pulse_data([f1, f2])
+        f3 = _make_frame_with_sync(
+            second=0, minute=2, hour=12, day=100, year=26,
+            stratum_enc=0, disp_enc=0,
+        )
+        onsets, widths = _frames_to_pulse_data([f1, f2, f3])
         ct = build_clock_table(onsets, widths)
 
         assert ct.sync_stratum is not None
@@ -583,16 +606,23 @@ class TestSyncArrays:
 
     def test_worst_case_metadata_still_present(self):
         """Metadata scalars (stratum, UTC_sync_precision) still present
-        alongside the new per-pulse arrays."""
+        alongside the new per-pulse arrays.
+
+        Uses 3 frames so frames 2-3 are decoded as complete frames.
+        """
         f1 = _make_frame_with_sync(
             second=0, minute=0, hour=12, day=100, year=26,
-            stratum_enc=1, disp_enc=3,
+            stratum_enc=0, disp_enc=0,
         )
         f2 = _make_frame_with_sync(
             second=0, minute=1, hour=12, day=100, year=26,
+            stratum_enc=1, disp_enc=3,
+        )
+        f3 = _make_frame_with_sync(
+            second=0, minute=2, hour=12, day=100, year=26,
             stratum_enc=2, disp_enc=5,
         )
-        onsets, widths = _frames_to_pulse_data([f1, f2])
+        onsets, widths = _frames_to_pulse_data([f1, f2, f3])
         ct = build_clock_table(onsets, widths)
 
         # Worst-case stratum = 3 (max of 2, 3)
