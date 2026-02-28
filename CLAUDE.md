@@ -64,6 +64,7 @@ Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder*
 - `video.py` — Video LED extraction + `decode_video_irig` entry point. OpenCV (`cv2`) is an optional dependency.
 - `events.py` — Event log parsing for MedPC files and CSV/TSV. Extracts IRIG pulse events and behavioral events from timestamped event logs. Supports MedPC TIME.CODE format and generic CSV/TSV. Provides `extract_irig_pulses` (pair HIGH/LOW → onsets/offsets for `decode_intervals_irig`), `filter_non_pulse_events`, `convert_events_to_utc`, and `write_events_csv`.
 - `decoder.py` — `IRIGDecoder` unified facade class with `from_dat`, `from_sglx`, `from_video`, `from_intervals`, and `from_events` classmethods. Delegates to the standalone `decode_*` functions. Event-based inputs support post-decode behavioral event extraction via `get_behavioral_events_utc` and `save_behavioral_events_csv`.
+- `report.py` — Sync report PNG generation. `generate_sync_report` produces a multi-panel diagnostic figure (signal snippet, pulse histogram, full overview, clock drift, sync status). `_try_generate_report` is the entry-point wrapper that catches errors so report failures never block decoding. matplotlib is lazy-imported (optional dependency via `pip install neurokairos[report]`). All `decode_*` entry points call `_try_generate_report` when `save=True`, producing a `.sync_report.png` alongside the `.clocktable.npz`. When `raw_signal` is None (intervals path), only drift and sync panels are drawn.
 
 ### Public API (`neurokairos/__init__.py`)
 - `ClockTable` — sparse time mapping

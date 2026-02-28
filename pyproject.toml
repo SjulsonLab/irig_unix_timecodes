@@ -27,6 +27,7 @@ include = ["neurokairos*"]
 
 [project.optional-dependencies]
 video = ["opencv-python"]
+report = ["matplotlib"]
 test = ["pytest"]
 
 [project.urls]

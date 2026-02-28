@@ -752,6 +752,16 @@ def decode_dat_irig(dat_path, n_channels, irig_channel, save=True):
         ct.save(ct_path)
         logger.info("Saved clock table to %s", ct_path)
 
+        # Generate visual sync report alongside the NPZ
+        png_path = dat_path.parent / (dat_path.name + ".sync_report.png")
+        from .report import _try_generate_report
+        _try_generate_report(
+            ct, png_path,
+            raw_signal=irig_signal,
+            threshold=threshold,
+            pulse_widths=widths,
+        )
+
     return ct
 
 
@@ -813,7 +823,15 @@ def decode_intervals_irig(intervals, offsets=None, source_units="seconds",
     )
 
     if save is not None:
-        ct.save(Path(save))
-        logger.info("Saved clock table to %s", save)
+        save_path = Path(save)
+        ct.save(save_path)
+        logger.info("Saved clock table to %s", save_path)
+
+        # Generate visual sync report (no raw signal for intervals path)
+        png_path = save_path.parent / (
+            save_path.name.replace(".clocktable.npz", "") + ".sync_report.png"
+        )
+        from .report import _try_generate_report
+        _try_generate_report(ct, png_path)
 
     return ct

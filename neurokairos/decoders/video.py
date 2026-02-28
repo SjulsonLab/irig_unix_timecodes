@@ -139,6 +139,18 @@ def decode_video_irig(
         ct.save(ct_path)
         logger.info("Saved clock table to %s", ct_path)
 
+        # Generate visual sync report alongside the NPZ
+        png_path = video_path.parent / (
+            video_path.name + ".sync_report.png"
+        )
+        from .report import _try_generate_report
+        _try_generate_report(
+            ct, png_path,
+            raw_signal=signal,
+            threshold=threshold,
+            pulse_widths=widths,
+        )
+
     return ct
 
 
