@@ -57,6 +57,9 @@ MARKER_POSITIONS = {0, 9, 19, 29, 39, 49, 59}
 STRATUM_BITS = (43, 44)
 ROOT_DISPERSION_BITS = (46, 47, 48)
 
+# Upper-bound values (ms) for each root dispersion bucket (index = encoded value)
+ROOT_DISPERSION_UPPER_MS = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, float("inf")]
+
 # Human-readable labels for root dispersion buckets (index = encoded value)
 ROOT_DISPERSION_LABELS = [
     "< 0.25 ms",   # 0

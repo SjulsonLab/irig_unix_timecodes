@@ -14,9 +14,13 @@ from neurokairos.irig import (
     bcd_encode,
     decode_frame,
     decode_partial_frame,
+    decode_sync_status,
+    build_clock_table,
     compute_elapsed_seconds,
     remove_extra_pulses,
     assign_timestamps_from_anchors,
+    ROOT_DISPERSION_UPPER_MS,
+    ROOT_DISPERSION_LABELS,
     SECONDS_WEIGHTS,
     MINUTES_WEIGHTS,
     HOURS_WEIGHTS,
@@ -397,3 +401,201 @@ class TestAssignTimestampsFromAnchors:
         # There should be a jump in ref at the boundary
         diffs = np.diff(ref)
         assert np.max(diffs) > 100
+
+
+# ---------------------------------------------------------------------------
+# Helpers for building synthetic IRIG frames with sync status bits
+# ---------------------------------------------------------------------------
+
+def _make_frame_with_sync(second=0, minute=30, hour=14, day=15, year=26,
+                          stratum_enc=0, disp_enc=0):
+    """Build a valid 60-element pulse_types array with optional sync bits.
+
+    Parameters
+    ----------
+    stratum_enc : int (0-3)
+        Encoded stratum value (actual stratum = stratum_enc + 1).
+        Bit 43 = LSB, bit 44 = MSB.
+    disp_enc : int (0-7)
+        Encoded root dispersion bucket.
+        Bit 46 = LSB, bit 47, bit 48 = MSB.
+    """
+    s_bcd = bcd_encode(second, SECONDS_WEIGHTS.tolist())
+    m_bcd = bcd_encode(minute, MINUTES_WEIGHTS.tolist())
+    h_bcd = bcd_encode(hour, HOURS_WEIGHTS.tolist())
+    d_bcd = bcd_encode(day, DAY_OF_YEAR_WEIGHTS.tolist())
+    ds_bcd = bcd_encode(0, DECISECONDS_WEIGHTS.tolist())
+    y_bcd = bcd_encode(year, YEARS_WEIGHTS.tolist())
+
+    frame = np.zeros(60, dtype=np.int8)
+
+    # Markers at standard positions
+    for pos in [0, 9, 19, 29, 39, 49, 59]:
+        frame[pos] = PULSE_MARKER
+
+    # BCD fields
+    for i, v in enumerate(s_bcd[0:4]): frame[1+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(s_bcd[4:7]): frame[6+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(m_bcd[0:4]): frame[10+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(m_bcd[4:7]): frame[15+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(h_bcd[0:4]): frame[20+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(h_bcd[4:6]): frame[25+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(d_bcd[0:4]): frame[30+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(d_bcd[4:8]): frame[35+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(d_bcd[8:10]): frame[40+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(ds_bcd[0:4]): frame[45+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(y_bcd[0:4]): frame[50+i] = PULSE_ONE if v else PULSE_ZERO
+    for i, v in enumerate(y_bcd[4:8]): frame[55+i] = PULSE_ONE if v else PULSE_ZERO
+
+    # Sync status bits (NeuroKairos extension)
+    # Stratum: bit 43 = LSB, bit 44 = MSB
+    frame[43] = PULSE_ONE if (stratum_enc & 1) else PULSE_ZERO
+    frame[44] = PULSE_ONE if (stratum_enc & 2) else PULSE_ZERO
+    # Root dispersion: bit 46 = LSB, 47, 48 = MSB
+    frame[46] = PULSE_ONE if (disp_enc & 1) else PULSE_ZERO
+    frame[47] = PULSE_ONE if (disp_enc & 2) else PULSE_ZERO
+    frame[48] = PULSE_ONE if (disp_enc & 4) else PULSE_ZERO
+
+    return frame
+
+
+def _frames_to_pulse_data(frames, sps=30_000.0):
+    """Convert a list of 60-element pulse_types arrays into synthetic
+    pulse_onsets and pulse_widths suitable for build_clock_table.
+
+    Returns (pulse_onsets, pulse_widths) as float64 arrays.
+    """
+    # Map pulse type codes to fractional widths
+    width_frac = {PULSE_ZERO: 0.2, PULSE_ONE: 0.5, PULSE_MARKER: 0.8}
+
+    all_types = np.concatenate(frames)
+    n = len(all_types)
+    onsets = np.arange(n, dtype=np.float64) * sps
+    widths = np.array([width_frac[int(t)] * sps for t in all_types],
+                      dtype=np.float64)
+    return onsets, widths
+
+
+# ---------------------------------------------------------------------------
+# TestDecodeSyncStatus — unit tests for the existing decode_sync_status()
+# ---------------------------------------------------------------------------
+
+class TestDecodeSyncStatus:
+    def test_stratum_encoding(self):
+        """Frames with known bits 43-44 produce correct stratum 1-4."""
+        for enc, expected_stratum in [(0, 1), (1, 2), (2, 3), (3, 4)]:
+            frame = _make_frame_with_sync(stratum_enc=enc)
+            result = decode_sync_status(frame)
+            assert result["stratum"] == expected_stratum, (
+                f"stratum_enc={enc}: expected stratum {expected_stratum}, "
+                f"got {result['stratum']}"
+            )
+
+    def test_root_dispersion_buckets(self):
+        """Frames with known bits 46-48 produce correct bucket 0-7."""
+        for bucket in range(8):
+            frame = _make_frame_with_sync(disp_enc=bucket)
+            result = decode_sync_status(frame)
+            assert result["root_dispersion_bucket"] == bucket, (
+                f"disp_enc={bucket}: expected bucket {bucket}, "
+                f"got {result['root_dispersion_bucket']}"
+            )
+
+    def test_invalid_status_bits(self):
+        """Marker or invalid pulse in status positions returns -1."""
+        frame = _make_frame_with_sync()
+        frame[43] = PULSE_MARKER  # corrupt a stratum bit
+        result = decode_sync_status(frame)
+        assert result["stratum"] == -1
+        assert result["root_dispersion_bucket"] == -1
+
+    def test_short_frame(self):
+        """Frame shorter than 60 pulses returns -1."""
+        short = np.zeros(30, dtype=np.int8)
+        result = decode_sync_status(short)
+        assert result["stratum"] == -1
+        assert result["root_dispersion_bucket"] == -1
+
+
+# ---------------------------------------------------------------------------
+# TestSyncArrays — integration tests for per-pulse sync arrays from
+# build_clock_table
+# ---------------------------------------------------------------------------
+
+class TestSyncArrays:
+    def test_build_clock_table_sync_arrays(self):
+        """Synthetic frames with known sync bits produce correct per-pulse
+        arrays of the right length, forward-filled from frame boundaries."""
+        # Frame 1: stratum 2 (enc=1), dispersion bucket 3 (< 2 ms)
+        # Frame 2: stratum 3 (enc=2), dispersion bucket 5 (< 8 ms)
+        f1 = _make_frame_with_sync(
+            second=0, minute=0, hour=12, day=100, year=26,
+            stratum_enc=1, disp_enc=3,
+        )
+        f2 = _make_frame_with_sync(
+            second=0, minute=1, hour=12, day=100, year=26,
+            stratum_enc=2, disp_enc=5,
+        )
+        onsets, widths = _frames_to_pulse_data([f1, f2])
+        ct = build_clock_table(onsets, widths)
+
+        # Arrays must exist and match source length
+        assert ct.sync_stratum is not None
+        assert ct.sync_dispersion_upperbound_ms is not None
+        assert len(ct.sync_stratum) == len(ct.source)
+        assert len(ct.sync_dispersion_upperbound_ms) == len(ct.source)
+
+        # Frame 1 pulses (0-59): stratum=2, disp upper=2.0
+        assert ct.sync_stratum[0] == 2.0
+        assert ct.sync_stratum[30] == 2.0
+        assert ct.sync_dispersion_upperbound_ms[0] == pytest.approx(2.0)
+        assert ct.sync_dispersion_upperbound_ms[30] == pytest.approx(2.0)
+
+        # Frame 2 pulses (60-119): stratum=3, disp upper=8.0
+        assert ct.sync_stratum[60] == 3.0
+        assert ct.sync_stratum[90] == 3.0
+        assert ct.sync_dispersion_upperbound_ms[60] == pytest.approx(8.0)
+        assert ct.sync_dispersion_upperbound_ms[90] == pytest.approx(8.0)
+
+        # No NaNs anywhere
+        assert not np.any(np.isnan(ct.sync_stratum))
+        assert not np.any(np.isnan(ct.sync_dispersion_upperbound_ms))
+
+    def test_build_clock_table_no_sync(self):
+        """All-zero status bits (old recordings or perfect GPS) produce
+        stratum=1 and dispersion=0.25 everywhere (backward compat)."""
+        f1 = _make_frame_with_sync(
+            second=0, minute=0, hour=12, day=100, year=26,
+            stratum_enc=0, disp_enc=0,
+        )
+        f2 = _make_frame_with_sync(
+            second=0, minute=1, hour=12, day=100, year=26,
+            stratum_enc=0, disp_enc=0,
+        )
+        onsets, widths = _frames_to_pulse_data([f1, f2])
+        ct = build_clock_table(onsets, widths)
+
+        assert ct.sync_stratum is not None
+        np.testing.assert_array_equal(ct.sync_stratum,
+                                      np.full(len(ct.source), 1.0))
+        np.testing.assert_array_equal(ct.sync_dispersion_upperbound_ms,
+                                      np.full(len(ct.source), 0.25))
+
+    def test_worst_case_metadata_still_present(self):
+        """Metadata scalars (stratum, UTC_sync_precision) still present
+        alongside the new per-pulse arrays."""
+        f1 = _make_frame_with_sync(
+            second=0, minute=0, hour=12, day=100, year=26,
+            stratum_enc=1, disp_enc=3,
+        )
+        f2 = _make_frame_with_sync(
+            second=0, minute=1, hour=12, day=100, year=26,
+            stratum_enc=2, disp_enc=5,
+        )
+        onsets, widths = _frames_to_pulse_data([f1, f2])
+        ct = build_clock_table(onsets, widths)
+
+        # Worst-case stratum = 3 (max of 2, 3)
+        assert ct.metadata["stratum"] == 3
+        # Worst-case dispersion = bucket 5 → "< 8 ms"
+        assert ct.metadata["UTC_sync_precision"] == "< 8 ms"

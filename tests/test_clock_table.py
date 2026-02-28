@@ -391,3 +391,111 @@ class TestSaveLoad:
         loaded = ClockTable.load(path)
         result = loaded.source_to_reference(np.array([15000.0]))
         np.testing.assert_allclose(result, [1000.5])
+
+
+class TestSyncArrays:
+    """Tests for optional per-pulse sync_stratum and
+    sync_dispersion_upperbound_ms arrays on ClockTable."""
+
+    def _make_ct_with_sync(self, n=5):
+        """Build a ClockTable with both sync arrays populated."""
+        source = np.arange(n, dtype=np.float64) * 30000.0
+        reference = np.arange(n, dtype=np.float64) + 1737000000.0
+        stratum = np.full(n, 2.0)
+        dispersion = np.full(n, 0.5)
+        return ClockTable(
+            source=source,
+            reference=reference,
+            nominal_rate=30000.0,
+            sync_stratum=stratum,
+            sync_dispersion_upperbound_ms=dispersion,
+        )
+
+    def test_construction_with_sync_arrays(self):
+        """Both arrays provided with correct length → accepted."""
+        ct = self._make_ct_with_sync(5)
+        assert ct.sync_stratum is not None
+        assert ct.sync_dispersion_upperbound_ms is not None
+        assert len(ct.sync_stratum) == 5
+        assert len(ct.sync_dispersion_upperbound_ms) == 5
+        assert ct.sync_stratum.dtype == np.float64
+        assert ct.sync_dispersion_upperbound_ms.dtype == np.float64
+
+    def test_construction_one_array_raises(self):
+        """Providing only one sync array raises ValueError."""
+        source = np.array([0.0, 30000.0])
+        reference = np.array([1000.0, 1001.0])
+        with pytest.raises(ValueError, match="both.*sync"):
+            ClockTable(
+                source=source,
+                reference=reference,
+                nominal_rate=30000.0,
+                sync_stratum=np.array([1.0, 1.0]),
+            )
+        with pytest.raises(ValueError, match="both.*sync"):
+            ClockTable(
+                source=source,
+                reference=reference,
+                nominal_rate=30000.0,
+                sync_dispersion_upperbound_ms=np.array([0.25, 0.25]),
+            )
+
+    def test_construction_wrong_length_raises(self):
+        """Sync arrays with wrong length raise ValueError."""
+        source = np.array([0.0, 30000.0, 60000.0])
+        reference = np.array([1000.0, 1001.0, 1002.0])
+        with pytest.raises(ValueError, match="length"):
+            ClockTable(
+                source=source,
+                reference=reference,
+                nominal_rate=30000.0,
+                sync_stratum=np.array([1.0, 1.0]),  # wrong length
+                sync_dispersion_upperbound_ms=np.array([0.25, 0.25]),
+            )
+
+    def test_save_load_round_trip(self, tmp_path):
+        """Sync arrays survive NPZ save/load."""
+        ct = self._make_ct_with_sync(5)
+        path = tmp_path / "sync_test.clocktable.npz"
+        ct.save(path)
+        loaded = ClockTable.load(path)
+        np.testing.assert_array_equal(loaded.sync_stratum, ct.sync_stratum)
+        np.testing.assert_array_equal(
+            loaded.sync_dispersion_upperbound_ms,
+            ct.sync_dispersion_upperbound_ms,
+        )
+
+    def test_save_load_without_sync(self, tmp_path):
+        """None sync arrays → loaded as None (backward compat)."""
+        ct = ClockTable(
+            source=np.array([0.0, 30000.0]),
+            reference=np.array([1000.0, 1001.0]),
+            nominal_rate=30000.0,
+        )
+        path = tmp_path / "nosync_test.clocktable.npz"
+        ct.save(path)
+        loaded = ClockTable.load(path)
+        assert loaded.sync_stratum is None
+        assert loaded.sync_dispersion_upperbound_ms is None
+
+    def test_repr_with_sync(self):
+        """Repr includes a sync status summary line when arrays present."""
+        n = 10
+        source = np.arange(n, dtype=np.float64) * 30000.0
+        reference = np.arange(n, dtype=np.float64) + 1737000000.0
+        # Varying stratum (1-2) and dispersion (0.25-1.0)
+        stratum = np.array([1.0]*5 + [2.0]*5)
+        dispersion = np.array([0.25]*5 + [1.0]*5)
+        ct = ClockTable(
+            source=source,
+            reference=reference,
+            nominal_rate=30000.0,
+            sync_stratum=stratum,
+            sync_dispersion_upperbound_ms=dispersion,
+        )
+        r = repr(ct)
+        assert "sync:" in r
+        # Should mention the stratum range
+        assert "stratum" in r.lower() or "1" in r
+        # Should mention dispersion info
+        assert "dispersion" in r.lower() or "ms" in r
