@@ -42,10 +42,18 @@ def _draw_text_header(fig, ct, raw_signal):
     if start_str and stop_str:
         lines.append(f"Recording: {start_str} → {stop_str}")
 
-    # Duration
+    # Duration and measured rate
     duration_s = ct.reference[-1] - ct.reference[0]
     duration_str = str(_dt.timedelta(seconds=int(duration_s)))
-    lines.append(f"Duration: {duration_str}")
+    units = ct.source_units
+    rate = ct.nominal_rate
+    if units == "samples":
+        rate_str = f"{rate:.2f} Hz"
+    elif units == "frames":
+        rate_str = f"{rate:.2f} fps"
+    else:
+        rate_str = f"{rate:.6f} s/s"
+    lines.append(f"Duration: {duration_str}  |  Measured rate: {rate_str}")
 
     # Pulse/frame stats
     lines.append(
@@ -218,8 +226,18 @@ def _draw_clock_drift(ax, ct):
              for t in ref]
 
     ax.plot(dates, residual_ms, linewidth=0.5, color="navy")
+    # Format rate with appropriate units for the source domain
+    units = ct.source_units
+    rate = ct.nominal_rate
+    if units == "samples":
+        rate_label = f"{rate:.2f} Hz"
+    elif units == "frames":
+        rate_label = f"{rate:.2f} fps"
+    else:
+        rate_label = f"{rate:.6f} s/s"
+
     ax.set_ylabel("Drift (ms)", fontsize=8)
-    ax.set_title("Clock drift (residual from nominal rate)", fontsize=9)
+    ax.set_title(f"Clock jitter (measured rate: {rate_label})", fontsize=9)
     ax.tick_params(labelsize=7)
     ax.axhline(0, color="gray", linewidth=0.5, linestyle="--")
 

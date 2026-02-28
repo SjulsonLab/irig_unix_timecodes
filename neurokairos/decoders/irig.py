@@ -697,10 +697,19 @@ def build_clock_table(pulse_onsets, pulse_widths):
         n_clean, sync_anchors
     )
 
+    # Compute measured rate from the full source/reference mapping.
+    # This is more accurate than the median inter-onset interval (sps)
+    # because it recovers fractional rates that integer-interval medians
+    # cannot represent.
+    measured_rate = (
+        (pulse_onsets[-1] - pulse_onsets[0])
+        / (reference[-1] - reference[0])
+    )
+
     return ClockTable(
         source=pulse_onsets.astype(np.float64),
         reference=reference,
-        nominal_rate=sps,
+        nominal_rate=measured_rate,
         source_units="samples",
         metadata=metadata,
         sync_stratum=sync_stratum,
