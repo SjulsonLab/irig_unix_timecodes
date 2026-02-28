@@ -6,7 +6,7 @@ from typing import Union
 
 import numpy as np
 
-from .clock_table import ClockTable
+from ..clock_table import ClockTable
 from .ttl import auto_threshold, detect_edges, measure_pulse_widths
 from .irig import build_clock_table
 

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from neurokairos.clock_table import ClockTable
-from neurokairos.video import (
+from neurokairos.decoders.video import (
     extract_led_signal,
     decode_video_irig,
     dropped_frame_report,

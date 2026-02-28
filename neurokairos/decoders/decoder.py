@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from .clock_table import ClockTable
+from ..clock_table import ClockTable
 
 logger = logging.getLogger(__name__)
 

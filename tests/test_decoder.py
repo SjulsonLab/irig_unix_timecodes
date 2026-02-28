@@ -14,11 +14,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import generate_irig_h_frame, _bit_to_pulse_frac
 
-from neurokairos.decoder import IRIGDecoder
+from neurokairos.decoders.decoder import IRIGDecoder
 from neurokairos.clock_table import ClockTable
-from neurokairos.irig import decode_dat_irig, decode_intervals_irig
-from neurokairos.sglx import decode_sglx_irig
-from neurokairos.events import (
+from neurokairos.decoders.irig import decode_dat_irig, decode_intervals_irig
+from neurokairos.decoders.sglx import decode_sglx_irig
+from neurokairos.decoders.events import (
     parse_medpc_file,
     extract_medpc_events,
     extract_irig_pulses,

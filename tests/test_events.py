@@ -16,7 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from conftest import generate_irig_h_frame, _bit_to_pulse_frac
 
-from neurokairos.events import (
+from neurokairos.decoders.events import (
     MedPCHeader,
     MedPCData,
     parse_medpc_file,
@@ -27,7 +27,7 @@ from neurokairos.events import (
     convert_events_to_utc,
     write_events_csv,
 )
-from neurokairos.irig import decode_intervals_irig
+from neurokairos.decoders.irig import decode_intervals_irig
 
 
 # -- Constants for synthetic data ----------------------------------------------

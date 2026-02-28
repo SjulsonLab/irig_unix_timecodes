@@ -17,7 +17,7 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-from .clock_table import ClockTable
+from ..clock_table import ClockTable
 from .ttl import auto_threshold, detect_edges, measure_pulse_widths
 
 # -- Pulse-width fractions (of 1 second) --------------------------------------

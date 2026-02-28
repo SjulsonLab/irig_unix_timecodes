@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from datetime import datetime, timezone, timedelta
 
-from neurokairos.irig import (
+from neurokairos.decoders.irig import (
     PULSE_ZERO,
     PULSE_ONE,
     PULSE_MARKER,

@@ -6,7 +6,7 @@ from typing import Optional, Tuple, Union
 
 import numpy as np
 
-from .clock_table import ClockTable
+from ..clock_table import ClockTable
 from .irig import build_clock_table
 from .ttl import auto_threshold, detect_edges, measure_pulse_widths
 
@@ -130,6 +130,8 @@ def decode_video_irig(
         nominal_rate=ct.nominal_rate,
         source_units="frames",
         metadata=metadata,
+        sync_stratum=ct.sync_stratum,
+        sync_dispersion_upperbound_ms=ct.sync_dispersion_upperbound_ms,
     )
 
     if save:

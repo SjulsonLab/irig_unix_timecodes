@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from neurokairos.ttl import auto_threshold, detect_edges, measure_pulse_widths
+from neurokairos.decoders.ttl import auto_threshold, detect_edges, measure_pulse_widths
 
 
 class TestAutoThreshold:

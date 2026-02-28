@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import numpy as np
 import pytest
 
-from neurokairos.irig import (
+from neurokairos.decoders.irig import (
     bcd_encode,
     SECONDS_WEIGHTS,
     MINUTES_WEIGHTS,

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from neurokairos.sglx import (
+from neurokairos.decoders.sglx import (
     read_meta,
     get_n_channels,
     get_sample_rate,

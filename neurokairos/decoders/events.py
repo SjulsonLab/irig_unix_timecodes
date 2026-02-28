@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
-from .clock_table import ClockTable
+from ..clock_table import ClockTable
 
 # Sentinel value that terminates MedPC data arrays
 _MEDPC_SENTINEL = -987.987
