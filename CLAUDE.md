@@ -55,9 +55,11 @@ Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder*
 - `raspberry_pi/scripts/test_chrony.sh` — Diagnostic script for checking chrony/gpsd status.
 
 ### Core Python Library (`neurokairos/`)
+- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional interpolation (linear extrapolation up to 1.5 s beyond boundaries; warns and clamps beyond that), optional per-pulse sync arrays (`sync_stratum`, `sync_dispersion_upperbound_ms`), save/load to NPZ, JSON-serializable metadata.
+
+### Decoder Subpackage (`neurokairos/decoders/`)
 - `ttl.py` — Signal processing: `auto_threshold` (Otsu's method), `detect_edges`, `measure_pulse_widths`. NumPy only, no dependencies on other modules.
-- `clock_table.py` — `ClockTable` dataclass: sparse time mapping (source <-> reference) with bidirectional interpolation (linear extrapolation up to 1.5 s beyond boundaries; warns and clamps beyond that), save/load to NPZ, JSON-serializable metadata.
-- `irig.py` — Complete IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding (complete + partial), robust handling of missing/extra pulses and concatenated files, `build_clock_table` orchestrator, plus top-level entry points `decode_dat_irig` and `decode_intervals_irig`.
+- `irig.py` — Complete IRIG-H decoder pipeline: pulse classification, BCD encode/decode, frame decoding (complete + partial), robust handling of missing/extra pulses and concatenated files, `build_clock_table` orchestrator (builds per-pulse sync arrays from frame anchors), plus top-level entry points `decode_dat_irig` and `decode_intervals_irig`.
 - `sglx.py` — SpikeGLX `.meta` reader + `decode_sglx_irig` entry point.
 - `video.py` — Video LED extraction + `decode_video_irig` entry point. OpenCV (`cv2`) is an optional dependency.
 - `events.py` — Event log parsing for MedPC files and CSV/TSV. Extracts IRIG pulse events and behavioral events from timestamped event logs. Supports MedPC TIME.CODE format and generic CSV/TSV. Provides `extract_irig_pulses` (pair HIGH/LOW → onsets/offsets for `decode_intervals_irig`), `filter_non_pulse_events`, `convert_events_to_utc`, and `write_events_csv`.
@@ -65,7 +67,7 @@ Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder*
 
 ### Public API (`neurokairos/__init__.py`)
 - `ClockTable` — sparse time mapping
-- `IRIGDecoder` — unified decoder facade (from `decoder.py`)
+- `IRIGDecoder` — unified decoder facade (from `decoders/decoder.py`)
 - `bcd_encode`, `bcd_decode` — BCD encoding/decoding
 - `decode_dat_irig` — decode from interleaved int16 `.dat` files
 - `decode_sglx_irig` — decode from SpikeGLX `.bin` + `.meta`
@@ -75,15 +77,18 @@ Three-component system: **Encoder** (Raspberry Pi, generates IRIG-H), **Decoder*
 - `parse_csv_events` — parse CSV/TSV event files
 - `extract_irig_pulses` — extract IRIG pulse onsets/offsets from event data
 - `convert_events_to_utc` — convert event timestamps to UTC via ClockTable
+- `ROOT_DISPERSION_UPPER_MS` — bucket upper bounds for root dispersion (ms)
 - BCD weight constants: `SECONDS_WEIGHTS`, `MINUTES_WEIGHTS`, `HOURS_WEIGHTS`, `DAY_OF_YEAR_WEIGHTS`, `DECISECONDS_WEIGHTS`, `YEARS_WEIGHTS`
 
-## Key Constants (neurokairos/irig.py)
+## Key Constants (neurokairos/decoders/irig.py)
 
 Pulse-width fractions of 1 second: `PULSE_FRAC_ZERO` (0.2), `PULSE_FRAC_ONE` (0.5), `PULSE_FRAC_MARKER` (0.8). Classification boundaries are midpoints: 0.35 (0/1), 0.65 (1/marker). Min valid: 0.1, max: 0.95.
 
 ## Sync Status Encoding (NeuroKairos Extension)
 
 The C sender polls chrony every ~60 seconds and encodes sync quality in previously unused IRIG-H frame bits. Bits 43-44 carry a 2-bit stratum code (1->0, 2->1, 3->2, >=4->3). Bits 46-48 carry a 3-bit root dispersion bucket on a doubling scale from <0.25ms (0) to >=16ms (7). Bits 42 and 45 remain zero (reserved). Old recordings with all-zero status bits are ambiguous with stratum 1 / best dispersion. See `docs/irig-h-standard.md` for the full encoding table.
+
+The Python decoder extracts sync status from each complete frame and produces two per-pulse arrays on ClockTable: `sync_stratum` (float64, values 1-4) and `sync_dispersion_upperbound_ms` (float64, bucket upper bounds from `ROOT_DISPERSION_UPPER_MS`: 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, inf). Values are forward-filled from frame anchors and backward-filled for leading pulses before the first decoded frame. Session-level worst-case scalars remain in metadata (`stratum`, `UTC_sync_precision`).
 
 ## Known Bug History
 
